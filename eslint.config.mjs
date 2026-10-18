@@ -51,7 +51,6 @@ export default tseslint.config(
       '@typescript-eslint/no-unnecessary-type-arguments': 'error',
       '@typescript-eslint/prefer-function-type': 'error',
       '@typescript-eslint/prefer-namespace-keyword': 'error',
-      '@typescript-eslint/return-await': ['error', 'in-try-catch'],
       '@typescript-eslint/triple-slash-reference': 'error',
 
       // ---------------------------------------------------------------------
@@ -78,6 +77,7 @@ export default tseslint.config(
       'no-multiple-empty-lines': ['error', { max: 1, maxEOF: 1, maxBOF: 0 }],
       'no-new-wrappers': 'error',
       'no-redeclare': 'error',
+      'no-return-await': 'error',
       'no-sequences': 'error',
       'no-sparse-arrays': 'error',
       'no-trailing-spaces': 'error',

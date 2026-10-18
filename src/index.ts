@@ -1,3 +1,4 @@
+import { Server } from 'node:http';
 import { createChatServer } from './server';
 import { CliOptions, ConfigError, HELP_TEXT, LoadedConfig, loadConfig, parseArgs } from './config';
 
@@ -18,16 +19,28 @@ function reportError(error: unknown): void {
 /**
  * Loads the effective configuration or returns undefined after reporting an error.
  */
-function tryLoadConfig(cli: CliOptions): LoadedConfig | undefined {
+async function tryLoadConfig(cli: CliOptions): Promise<LoadedConfig | undefined> {
   try {
-    return loadConfig({ configPath: cli.configPath });
+    return await loadConfig({ configDir: cli.configDir });
   } catch (error) {
     reportError(error);
     return undefined;
   }
 }
 
-function main(): void {
+/**
+ * Creates the server, reporting adapter construction errors instead of throwing.
+ */
+function tryCreateServer(options: Parameters<typeof createChatServer>[0]): Server | undefined {
+  try {
+    return createChatServer(options);
+  } catch (error) {
+    reportError(error);
+    return undefined;
+  }
+}
+
+async function main(): Promise<void> {
   let cli: CliOptions;
   try {
     cli = parseArgs(process.argv.slice(2));
@@ -41,23 +54,41 @@ function main(): void {
     return;
   }
 
-  const config = tryLoadConfig(cli);
+  const config = await tryLoadConfig(cli);
   if (config === undefined) {
     return;
   }
 
   if (cli.printConfig) {
-    console.log(JSON.stringify({ configPath: config.configPath, config: config.values }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          configPath: config.configPath,
+          configDir: config.configDir,
+          config: config.values
+        },
+        null,
+        2
+      )
+    );
     return;
   }
 
   if (config.created) {
     console.log(`[config] created ${config.configPath} with default values`);
   }
-  console.log(`[config] using ${config.configPath}`);
+  console.log(`[config] using ${config.configPath} (folder: ${config.configDir})`);
 
-  const { host, port, welcomeMessage } = config.values;
-  const server = createChatServer({ welcomeMessage });
+  const { host, port, welcomeMessage, chats } = config.values;
+
+  const server = tryCreateServer({
+    chats,
+    welcomeMessage,
+    configDir: config.configDir
+  });
+  if (server === undefined) {
+    return;
+  }
 
   server.on('error', (error) => {
     reportError(error);
@@ -79,4 +110,6 @@ function main(): void {
   process.on('SIGTERM', shutdown);
 }
 
-main();
+main().catch((error) => {
+  reportError(error);
+});
