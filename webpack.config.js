@@ -12,15 +12,18 @@ module.exports = (env, argv) => {
   return {
     mode,
     target: 'node',
-    entry: './src/index.ts',
+    entry: {
+      index: './src/index.ts',
+      'models/chatserver-models': './src/models/chatserver-models.ts',
+    },
     plugins: [
-      // Make dist/index.js directly executable so it can be used as an npm `bin`.
+      // Make each entry directly executable so they can be used as npm `bin` scripts.
       new webpack.BannerPlugin({ banner: '#!/usr/bin/env node', raw: true, entryOnly: true }),
     ],
     devtool: 'source-map',
     output: {
       path: path.resolve(__dirname, 'dist'),
-      filename: 'index.js',
+      filename: '[name].js',
       // Emit relative source paths so VS Code can map breakpoints back to src/.
       devtoolNamespace: '',
       // Remove stale files from previous builds.
