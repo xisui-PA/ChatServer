@@ -1,4 +1,5 @@
 const path = require('path');
+const webpack = require('webpack');
 
 /**
  * @param {Record<string, unknown>} env
@@ -12,6 +13,10 @@ module.exports = (env, argv) => {
     mode,
     target: 'node',
     entry: './src/index.ts',
+    plugins: [
+      // Make dist/index.js directly executable so it can be used as an npm `bin`.
+      new webpack.BannerPlugin({ banner: '#!/usr/bin/env node', raw: true, entryOnly: true }),
+    ],
     devtool: 'source-map',
     output: {
       path: path.resolve(__dirname, 'dist'),

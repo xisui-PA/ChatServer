@@ -3,7 +3,14 @@
   "version": "1.0.0",
   "description": "A simple WebSocket chat server built with TypeScript",
   "main": "dist/index.js",
+  "bin": {
+    "chatserver": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "prepare": "npm run build",
     "build": "webpack --mode production",
     "build:dev": "webpack --mode development",
     "watch": "webpack --mode development --watch",
