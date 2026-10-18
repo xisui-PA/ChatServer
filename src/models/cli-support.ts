@@ -1,6 +1,6 @@
 import path from 'node:path';
 import * as readline from 'node:readline/promises';
-import { getDefaultConfigDir } from '../config';
+import { getDefaultConfigDir } from '../config-dir';
 
 /**
  * Raised for invalid command-line usage.

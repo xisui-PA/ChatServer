@@ -1,4 +1,4 @@
-import { FilterAdapter, FilterResult } from './interface';
+import { FilterAdapter, FilterOutcome } from './interface';
 
 /**
  * Reference filter that allows every message.
@@ -6,7 +6,7 @@ import { FilterAdapter, FilterResult } from './interface';
 export class AllowAllFilter implements FilterAdapter {
   public readonly name = 'allow-all';
 
-  public shouldReply(): FilterResult {
-    return true;
+  public shouldReply(): FilterOutcome {
+    return FilterOutcome.Allowed;
   }
 }

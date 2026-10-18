@@ -1,6 +1,6 @@
 import { IncomingMessage } from '../messagers/interface';
 import { SenderIdSource } from './ignore-file';
-import { FilterAdapter, FilterResult } from './interface';
+import { FilterAdapter, FilterOutcome } from './interface';
 
 /**
  * Distinguishes a dynamic source from a fixed list of sender IDs.
@@ -26,8 +26,8 @@ export class IgnoreSenderFilter implements FilterAdapter {
       : { getSenderIds: () => new Set(senderIds) };
   }
 
-  public async shouldReply(message: IncomingMessage): Promise<FilterResult> {
+  public async shouldReply(message: IncomingMessage): Promise<FilterOutcome> {
     const senderIds = await this.source.getSenderIds();
-    return senderIds.has(message.senderId) ? false : 'optional';
+    return senderIds.has(message.senderId) ? FilterOutcome.Denied : FilterOutcome.Optional;
   }
 }

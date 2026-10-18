@@ -1,16 +1,14 @@
 import { IncomingMessage } from '../messagers/interface';
 
 /**
- * Decision returned by a {@link FilterAdapter}:
- *
- * - `true` — the message should be replied to.
- * - `false` — the message should not be replied to.
- * - `'optional'` — no opinion; let the next filter decide. If no filter decides,
- *   the server applies its configured fallback (reply by default).
- *
- * Adapters may return the value directly or asynchronously (e.g. after an API call).
+ * Decision from an individual filter or a chain of filters.
+ * Optional delegates to the next filter, or to the reply model if all abstain.
  */
-export type FilterResult = boolean | 'optional';
+export enum FilterOutcome {
+  Allowed = 'allowed',
+  Denied = 'denied',
+  Optional = 'optional'
+}
 
 /**
  * Decides whether an inbound message should be replied to.
@@ -21,13 +19,8 @@ export interface FilterAdapter {
   /** Human-readable adapter name, used in logs. */
   readonly name: string;
   /** Decides whether `message` should be replied to. */
-  shouldReply(message: IncomingMessage): FilterResult | Promise<FilterResult>;
+  shouldReply(message: IncomingMessage): FilterOutcome | Promise<FilterOutcome>;
 }
-
-/**
- * Aggregate outcome of running a filter chain.
- */
-export type FilterOutcome = 'allowed' | 'denied' | 'optional';
 
 /**
  * Result of evaluating a chain of filters.
@@ -41,7 +34,7 @@ export interface FilterEvaluation {
 /**
  * Runs filters in order and returns the first decisive outcome.
  *
- * A filter that throws is treated as `false` (fail closed) so a broken filter
+ * A filter that throws is treated as `FilterOutcome.Denied` (fail closed) so a broken filter
  * cannot accidentally allow messages through.
  */
 export async function evaluateFilters(
@@ -49,7 +42,7 @@ export async function evaluateFilters(
   message: IncomingMessage
 ): Promise<FilterEvaluation> {
   for (const filter of filters) {
-    let result: FilterResult;
+    let result: FilterOutcome;
 
     try {
       result = await filter.shouldReply(message);
@@ -57,19 +50,15 @@ export async function evaluateFilters(
       console.error(
         `[chat] filter "${filter.name}" failed: ${(error as Error).message}; dropping message`
       );
-      return { outcome: 'denied', decidedBy: filter.name };
+      return { outcome: FilterOutcome.Denied, decidedBy: filter.name };
     }
 
-    if (result === true) {
-      return { outcome: 'allowed', decidedBy: filter.name };
+    if (result !== FilterOutcome.Optional) {
+      return { outcome: result, decidedBy: filter.name };
     }
 
-    if (result === false) {
-      return { outcome: 'denied', decidedBy: filter.name };
-    }
-
-    // result === 'optional': abstain and let the next filter decide.
+    // Optional: abstain and let the next filter decide.
   }
 
-  return { outcome: 'optional' };
+  return { outcome: FilterOutcome.Optional };
 }

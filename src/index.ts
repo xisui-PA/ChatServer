@@ -1,6 +1,50 @@
 import path from 'node:path';
-import { ChatServer, createChatServer } from './server';
-import { CliOptions, ConfigError, LoadedConfig, getDefaultConfigDir, loadConfig, parseArgs } from './config';
+import { ChatServer } from './server';
+import { ChatServerOptions, ConfigError, LoadedConfig, loadConfig } from './config';
+import { getDefaultConfigDir } from './config-dir';
+
+/**
+ * Options accepted by the `chatserver` executable.
+ */
+interface CliOptions {
+  configDir?: string;
+  printConfig: boolean;
+  help: boolean;
+}
+
+/**
+ * Parses the CLI arguments accepted by the executable.
+ */
+function parseArgs(argv: string[]): CliOptions {
+  const options: CliOptions = { printConfig: false, help: false };
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+
+    if (arg === '--config_dir' || arg === '-c') {
+      const value = argv[i + 1];
+      if (value === undefined || value.startsWith('-')) {
+        throw new Error(`${arg} requires a directory.`);
+      }
+      options.configDir = value;
+      i += 1;
+    } else if (arg.startsWith('--config_dir=')) {
+      const value = arg.slice('--config_dir='.length);
+      if (value === '') {
+        throw new Error('--config_dir requires a directory.');
+      }
+      options.configDir = value;
+    } else if (arg === '--print-config') {
+      options.printConfig = true;
+    } else if (arg === '--help' || arg === '-h') {
+      options.help = true;
+    } else {
+      throw new Error(`Unknown option: ${arg}. Run "chatserver --help" for usage.`);
+    }
+  }
+
+  return options;
+}
 
 /**
  * Reports an error to stderr and marks the process as failed.
@@ -32,14 +76,16 @@ async function tryLoadConfig(
 }
 
 /**
- * Creates the server, reporting adapter construction errors instead of throwing.
+ * Constructs and starts the server, reporting adapter errors instead of throwing.
  */
 async function tryCreateServer(
-  options: Parameters<typeof createChatServer>[0],
+  options: ChatServerOptions,
   configDir: string
 ): Promise<ChatServer | undefined> {
   try {
-    return await createChatServer(options, configDir);
+    const server = new ChatServer(options, configDir);
+    await server.start();
+    return server;
   } catch (error) {
     reportError(error);
     return undefined;
@@ -108,14 +154,12 @@ async function main(): Promise<void> {
   }
   console.log(`[config] using ${config.configPath} (folder: ${configDir})`);
 
-  const { chats } = config.values;
-
-  const server = await tryCreateServer({ chats }, configDir);
+  const server = await tryCreateServer(config.values, configDir);
   if (server === undefined) {
     return;
   }
 
-  console.log(`ChatServer started with ${chats.length} chat pipeline(s)`);
+  console.log(`ChatServer started with ${config.values.chats.length} chat pipeline(s)`);
 
   /** Gracefully stop adapters on Ctrl+C / SIGTERM. */
   const shutdown = () => {

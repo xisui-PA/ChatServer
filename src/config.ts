@@ -1,37 +1,38 @@
 import { promises as fsp } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { hasFilter, listFilters } from './filters/registry';
 import { hasMessager, listMessagers } from './messagers/registry';
 
-/**
- * A named implementation plus its config-file options.
- */
-export interface AdapterSpec {
-  /** Registered implementation name, e.g. a messager name or `ignore-sender`. */
+/** Configuration for a registered messager implementation. */
+export interface MessagerSpec {
+  /** Registered messager name, e.g. `wechat`. */
   type: string;
-  /** Options passed to the implementation's factory. */
-  options: Readonly<Record<string, unknown>>;
+  /** Options passed to the messager factory. */
+  options?: Readonly<Record<string, unknown>>;
+}
+
+/** Configuration for a registered filter implementation. */
+export interface FilterSpec {
+  /** Registered filter name, e.g. `ignore-sender`. */
+  type: string;
+  /** Options passed to the filter factory. */
+  options?: Readonly<Record<string, unknown>>;
 }
 
 /**
  * One chat pipeline: a messager plus the filters applied to inbound messages.
  */
 export interface ChatDefinition {
-  /** Unique chat name, used in logs. */
-  name: string;
   /** Messager implementation receiving and sending messages. */
-  messager: AdapterSpec;
+  messager: MessagerSpec;
   /** Filters deciding whether a message should be replied to. */
-  filters: readonly AdapterSpec[];
-  /** Per-chat override for the fallback used when every filter abstains. */
-  replyWhenOptional?: boolean;
+  filters: readonly FilterSpec[];
 }
 
 /**
- * Resolved configuration values used at runtime.
+ * Structure of config.json, used to create the chat server.
  */
-export interface ChatServerConfig {
+export interface ChatServerOptions {
   /** Chat pipelines served by this process. */
   chats: readonly ChatDefinition[];
 }
@@ -39,12 +40,12 @@ export interface ChatServerConfig {
 /**
  * Values used when the config file does not specify an option.
  */
-export const DEFAULT_CONFIG: ChatServerConfig = {
+export const DEFAULT_CONFIG: ChatServerOptions = {
   chats: []
 };
 
 /**
- * Raised for malformed config files or invalid command-line arguments.
+ * Raised for malformed config files or invalid configuration values.
  */
 export class ConfigError extends Error {
   public constructor(message: string) {
@@ -54,19 +55,10 @@ export class ConfigError extends Error {
 }
 
 /**
- * Options accepted by the `chatserver` executable.
- */
-export interface CliOptions {
-  configDir?: string;
-  printConfig: boolean;
-  help: boolean;
-}
-
-/**
  * A config file plus the values that were resolved from it.
  */
 export interface LoadedConfig {
-  values: ChatServerConfig;
+  values: ChatServerOptions;
   /** Path of the config file that was read. */
   configPath: string;
   /** True when the file did not exist and a default one was written. */
@@ -76,33 +68,6 @@ export interface LoadedConfig {
 export interface LoadConfigOptions {
   /** Set to true to create a missing config file. Defaults to false. */
   createIfMissing?: boolean;
-}
-
-/**
- * Returns the platform-appropriate per-user config folder.
- */
-export function getDefaultConfigDir(platform: NodeJS.Platform = process.platform): string {
-  const home = os.homedir();
-
-  switch (platform) {
-    case 'win32': {
-      const appData = process.env.APPDATA ?? path.join(home, 'AppData', 'Roaming');
-      return path.join(appData, 'chatserver');
-    }
-    case 'darwin':
-      return path.join(home, 'Library', 'Application Support', 'chatserver');
-    default: {
-      const configHome = process.env.XDG_CONFIG_HOME ?? path.join(home, '.config');
-      return path.join(configHome, 'chatserver');
-    }
-  }
-}
-
-/**
- * Returns the platform-appropriate per-user config file location.
- */
-export function getDefaultConfigPath(platform: NodeJS.Platform = process.platform): string {
-  return path.join(getDefaultConfigDir(platform), 'config.json');
 }
 
 /**
@@ -156,7 +121,10 @@ function warnUnknownKeys(record: Record<string, unknown>, known: readonly string
 /**
  * Normalizes a messager/filter spec from either a shorthand string or an object.
  */
-function parseAdapterSpec(value: unknown, where: string): AdapterSpec {
+function parseSpecFields(value: unknown, where: string): {
+  type: string;
+  options: Readonly<Record<string, unknown>>;
+} {
   if (typeof value === 'string') {
     if (value.trim() === '') {
       throw new ConfigError(`${where} must not be empty.`);
@@ -184,71 +152,60 @@ function parseAdapterSpec(value: unknown, where: string): AdapterSpec {
   return { type: value.type.trim(), options };
 }
 
+/** Parses a messager specification and validates its registered name. */
+function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
+  const messager = parseSpecFields(value, where);
+  if (!hasMessager(messager.type)) {
+    throw new ConfigError(
+      `${where}: unknown messager "${messager.type}". ` +
+        `Available: ${listMessagers().join(', ')}.`
+    );
+  }
+  return messager;
+}
+
+/** Parses a filter specification and validates its registered name. */
+function parseFilterSpec(value: unknown, where: string): FilterSpec {
+  const filter = parseSpecFields(value, where);
+  if (!hasFilter(filter.type)) {
+    throw new ConfigError(
+      `${where}: unknown filter "${filter.type}". ` +
+        `Available: ${listFilters().join(', ')}.`
+    );
+  }
+  return filter;
+}
+
 /**
  * Validates one entry of the `chats` array.
  */
-function parseChat(value: unknown, index: number, seenNames: Set<string>): ChatDefinition {
+function parseChat(value: unknown, index: number): ChatDefinition {
   const where = `chats[${index}]`;
 
   if (!isPlainObject(value)) {
     throw new ConfigError(`${where} must be an object.`);
   }
 
-  warnUnknownKeys(value, ['name', 'messager', 'filters', 'replyWhenOptional'], where);
+  warnUnknownKeys(value, ['messager', 'filters'], where);
 
-  let name = `chat-${index + 1}`;
-  if (value.name !== undefined) {
-    if (typeof value.name !== 'string' || value.name.trim() === '') {
-      throw new ConfigError(`${where}: "name" must be a non-empty string.`);
-    }
-    name = value.name.trim();
-  }
-
-  if (seenNames.has(name)) {
-    throw new ConfigError(`${where}: duplicate chat name "${name}".`);
-  }
-  seenNames.add(name);
-
-  const messager = parseAdapterSpec(value.messager, `${where}.messager`);
-
-  if (!hasMessager(messager.type)) {
-    throw new ConfigError(
-      `${where}.messager: unknown messager "${messager.type}". ` +
-        `Available: ${listMessagers().join(', ')}.`
-    );
-  }
+  const messager = parseMessagerSpec(value.messager, `${where}.messager`);
 
   const filtersValue = value.filters ?? [];
   if (!Array.isArray(filtersValue)) {
     throw new ConfigError(`${where}: "filters" must be an array.`);
   }
 
-  const filters = filtersValue.map((filterValue, filterIndex) => {
-    const filter = parseAdapterSpec(filterValue, `${where}.filters[${filterIndex}]`);
-    if (!hasFilter(filter.type)) {
-      throw new ConfigError(
-        `${where}.filters[${filterIndex}]: unknown filter "${filter.type}". ` +
-          `Available: ${listFilters().join(', ')}.`
-      );
-    }
-    return filter;
-  });
+  const filters = filtersValue.map((filterValue, filterIndex) =>
+    parseFilterSpec(filterValue, `${where}.filters[${filterIndex}]`)
+  );
 
-  let replyWhenOptional: boolean | undefined;
-  if (value.replyWhenOptional !== undefined) {
-    if (typeof value.replyWhenOptional !== 'boolean') {
-      throw new ConfigError(`${where}: "replyWhenOptional" must be a boolean.`);
-    }
-    replyWhenOptional = value.replyWhenOptional;
-  }
-
-  return { name, messager, filters, replyWhenOptional };
+  return { messager, filters };
 }
 
 /**
  * Validates a parsed JSON value and merges it over the defaults.
  */
-function validateConfig(input: unknown, configPath: string): ChatServerConfig {
+function validateConfig(input: unknown, configPath: string): ChatServerOptions {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     throw new ConfigError(`${configPath} must contain a JSON object.`);
   }
@@ -256,15 +213,14 @@ function validateConfig(input: unknown, configPath: string): ChatServerConfig {
   const record = input as Record<string, unknown>;
   warnUnknownKeys(record, Object.keys(DEFAULT_CONFIG), configPath);
 
-  const config: ChatServerConfig = { ...DEFAULT_CONFIG };
+  const config: ChatServerOptions = { ...DEFAULT_CONFIG };
 
   if (record.chats !== undefined) {
     if (!Array.isArray(record.chats)) {
       throw new ConfigError(`${configPath}: "chats" must be an array.`);
     }
 
-    const seenNames = new Set<string>();
-    config.chats = record.chats.map((chat, index) => parseChat(chat, index, seenNames));
+    config.chats = record.chats.map((chat, index) => parseChat(chat, index));
   }
 
   return config;
@@ -273,7 +229,7 @@ function validateConfig(input: unknown, configPath: string): ChatServerConfig {
 /**
  * Reads and validates a config file.
  */
-async function readConfigFile(configPath: string): Promise<ChatServerConfig> {
+async function readConfigFile(configPath: string): Promise<ChatServerOptions> {
   let contents: string;
   try {
     contents = await fsp.readFile(configPath, 'utf8');
@@ -289,13 +245,6 @@ async function readConfigFile(configPath: string): Promise<ChatServerConfig> {
   }
 
   return validateConfig(parsed, configPath);
-}
-
-/**
- * Applies environment variable overrides on top of the config file values.
- */
-export function applyEnvironment(config: ChatServerConfig): ChatServerConfig {
-  return { ...config };
 }
 
 /** Loads config.json from the directory selected at invocation. */
@@ -320,40 +269,6 @@ export async function loadConfig(
     created = true;
   }
 
-  const values = applyEnvironment(await readConfigFile(configPath));
+  const values = await readConfigFile(configPath);
   return { values, configPath, created };
-}
-
-/**
- * Parses the CLI arguments accepted by the executable.
- */
-export function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { printConfig: false, help: false };
-
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-
-    if (arg === '--config_dir' || arg === '-c') {
-      const value = argv[i + 1];
-      if (value === undefined || value.startsWith('-')) {
-        throw new ConfigError(`${arg} requires a directory.`);
-      }
-      options.configDir = value;
-      i += 1;
-    } else if (arg.startsWith('--config_dir=')) {
-      const value = arg.slice('--config_dir='.length);
-      if (value === '') {
-        throw new ConfigError('--config_dir requires a directory.');
-      }
-      options.configDir = value;
-    } else if (arg === '--print-config') {
-      options.printConfig = true;
-    } else if (arg === '--help' || arg === '-h') {
-      options.help = true;
-    } else {
-      throw new ConfigError(`Unknown option: ${arg}. Run "chatserver --help" for usage.`);
-    }
-  }
-
-  return options;
 }
