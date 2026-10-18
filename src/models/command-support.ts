@@ -1,4 +1,4 @@
-import { createCredentialStore } from './credentials';
+import { getModelApiKey } from './credentials';
 import {
   CliError,
   CommandLine,
@@ -116,19 +116,5 @@ export async function newApiKey(cli: CommandLine, provider: string): Promise<str
  * Finds the API key used to call a provider's models.
  */
 export async function existingApiKey(provider: ProviderConfig): Promise<string> {
-  const fromEnvironment = process.env.CHATSERVER_MODEL_API_KEY;
-  if (fromEnvironment !== undefined && fromEnvironment !== '') {
-    return fromEnvironment;
-  }
-
-  const credentials = createCredentialStore();
-  const stored = await credentials.get(provider.provider);
-  if (stored === undefined || stored === '') {
-    throw new CliError(
-      `No API key found in the ${credentials.name} for provider "${provider.provider}". ` +
-        'Run "chatserver-models add" or "chatserver-models update --api-key" to store one, ' +
-        'or set CHATSERVER_MODEL_API_KEY.'
-    );
-  }
-  return stored;
+  return getModelApiKey(provider.provider);
 }

@@ -296,3 +296,21 @@ export function createCredentialStore(platform: NodeJS.Platform = process.platfo
       );
   }
 }
+
+/** Reads a provider API key, allowing the same override as the model CLI. */
+export async function getModelApiKey(provider: string): Promise<string> {
+  const override = process.env.CHATSERVER_MODEL_API_KEY;
+  if (override !== undefined && override !== '') {
+    return override;
+  }
+  const credentials = createCredentialStore();
+  const stored = await credentials.get(provider);
+  if (stored === undefined || stored === '') {
+    throw new CredentialError(
+      `No API key found in the ${credentials.name} for provider "${provider}". ` +
+        'Run "chatserver-models add" or "chatserver-models update --api-key" to store one, ' +
+        'or set CHATSERVER_MODEL_API_KEY.'
+    );
+  }
+  return stored;
+}

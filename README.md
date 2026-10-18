@@ -1,6 +1,6 @@
 # ChatServer
 
-A TypeScript bridge for messager apps and LLM models. ChatServer runs adapter-based message pipelines without opening HTTP or WebSocket listening ports. The current pipeline filters and echoes messages; model management and testing are available through `chatserver-models`.
+A TypeScript bridge for messager apps and LLM models. ChatServer runs adapter-based message pipelines without opening HTTP or WebSocket listening ports. Pipelines filter incoming messages and generate replies using configured LLM models; model management and testing are available through `chatserver-models`.
 
 ## Project structure
 
@@ -13,6 +13,7 @@ ChatServer/
 │   ├── filters/
 │   │   ├── interface.ts        # FilterAdapter interface + chain evaluation
 │   │   ├── allow-all.ts        # AllowAllFilter implementation
+│   │   ├── model.ts            # LLM filter returning FilterOutcome
 │   │   ├── ignore-sender.ts    # IgnoreSenderFilter implementation
 │   │   ├── ignore-file.ts      # File-backed sender list with live reload
 │   │   └── registry.ts         # Name → filter factory registry
@@ -20,6 +21,19 @@ ChatServer/
 │   │   ├── interface.ts        # MessagerAdapter interface and message types
 │   │   ├── wechat.ts           # agent-wechat REST polling adapter
 │   │   └── registry.ts         # Name → messager factory registry
+│   ├── tools/
+│   │   ├── interface.ts        # Application-managed tool contract and schemas
+│   │   ├── registry.ts         # Built-in tool registration and selection
+│   │   ├── runner.ts           # Argument handling and bounded tool results
+│   │   ├── web-search.ts       # DuckDuckGo search (replaceable backend)
+│   │   ├── read-url.ts         # Public web page reading
+│   │   ├── calculate.ts        # Arithmetic parser (no JavaScript execution)
+│   │   ├── current-time.ts     # Time and timezone lookup
+│   │   ├── http.ts             # Bounded downloads and public-address checks
+│   │   └── html.ts             # HTML text extraction
+│   ├── repliers/
+│   │   ├── interface.ts        # Replier interface
+│   │   └── model.ts            # ModelReplier: LLM replies and optional decisions
 │   ├── models/
 │   │   ├── chatserver-models.ts # Unified CLI entry point and dispatcher
 │   │   ├── add.ts              # `add` command
@@ -31,6 +45,8 @@ ChatServer/
 │   │   ├── model-store.ts      # models.json read/write and validation
 │   │   ├── credentials.ts      # OS credential manager backends
 │   │   ├── responses-client.ts # OpenAI Responses API client
+│   │   ├── reference.ts        # provider/model-id reference parsing
+│   │   ├── runtime.ts          # Runtime model and credential binding
 │   │   └── cli-support.ts      # Shared argument parsing and prompts
 │   ├── index.ts         # Entry point: CLI parsing, startup, and shutdown
 │   ├── server.ts        # Message pipeline wiring and adapter lifecycle
@@ -125,13 +141,29 @@ Each entry in `chats` selects a registered messager and a list of filters by nam
 
 | Field | Type | Description |
 | ----- | ---- | ----------- |
-| `messager` | string or object | Messager implementation. Required; no default transport. |
+| `messager` | object | Required `name`, `replyer`; optional replier `tools` and transport `options`. |
 | `filters` | array | Filters applied in order. Defaults to `[]` (no filter decision). |
 
-A messager or filter may be written as a plain name (`"my-messager"`) or with options:
+Messagers bind a chat-app transport to a reply model. Filters select an implementation
+using `type`, with an additional `model` reference when `type` is `model`:
 
 ```json
-{ "type": "ignore-sender", "options": { "file": "lobby_ignore" } }
+{
+  "messager": {
+    "name": "wechat",
+    "replyer": "my-provider/my-model-id",
+    "tools": ["web_search", "read_url", "calculate", "current_time"],
+    "options": { "tokenEnv": "AGENT_WECHAT_TOKEN" }
+  },
+  "filters": [
+    { "type": "ignore" },
+    {
+      "type": "model",
+      "model": "my-provider/my-filter-model-id",
+      "options": { "instructions": "Allow questions; deny advertisements; otherwise abstain." }
+    }
+  ]
+}
 ```
 
 Available implementations:
@@ -140,7 +172,8 @@ Available implementations:
 | ---- | ---- | ------- |
 | messager | `wechat` | `baseUrl`, `tokenEnv`, `tokenFile`, `chatIds`, `pollIntervalMs`, `timeoutMs` |
 | filter | `allow-all` | none |
-| filter | `ignore-sender` | `file` (string), `senderIds` (string array) |
+| filter | `ignore` / `ignore-sender` | `file` (string), `senderIds` (string array) |
+| filter | `model` | Top-level `model` reference required; `options.instructions` customizes decision criteria |
 
 ### WeChat adapter
 
@@ -156,7 +189,8 @@ Example `config.json`:
   "chats": [
     {
       "messager": {
-        "type": "wechat",
+        "name": "wechat",
+        "replyer": "my-provider/my-model-id",
         "options": {
           "baseUrl": "http://127.0.0.1:6174",
           "tokenEnv": "AGENT_WECHAT_TOKEN",
@@ -206,8 +240,9 @@ Sends are serialized and are never retried automatically. Media is not supported
 Avoid configuring multiple pipelines to monitor the same WeChat conversations,
 which would cause duplicate replies.
 
-The current core **echoes incoming text** after filtering; it does not yet generate
-LLM replies. With `filters: []`, every eligible incoming text gets an echo.
+The configured `replyer` generates the response. With `filters: []`, the reply model
+decides whether a response is useful. Add `allow-all` to require a response for every
+eligible incoming text.
 
 ### Ignore list file
 
@@ -288,6 +323,8 @@ file per implementation. All of them are re-exported from `src/server.ts`.
 | `messagers/interface.ts` | `MessagerAdapter` interface and message types |
 | `messagers/wechat.ts` | `WechatMessagerAdapter` REST polling and text replies |
 | `messagers/registry.ts` | Name → messager factory registry |
+| `repliers/interface.ts` | `Replier` interface |
+| `repliers/model.ts` | `ModelReplier` reply generation |
 
 Implementations are registered by name so the config file can select them. To add your
 own, register it at startup before loading the config:
@@ -352,9 +389,9 @@ export interface FilterAdapter {
 
 Filters run in order and the first decisive result wins. If every filter abstains (or no
 filters are configured), the reply model is responsible for deciding whether to respond.
-There is no configuration flag for that decision. The current reply stage is still an
-echo placeholder; model-backed decisions are not implemented yet. A filter that throws
-is treated as `FilterOutcome.Denied` (fail closed).
+There is no configuration flag for that decision. A filter that throws or produces an
+invalid model decision is treated as `FilterOutcome.Denied` (fail closed). A denied
+message never reaches the reply model.
 
 ```ts
 import path from 'node:path';
@@ -364,7 +401,7 @@ import { ChatServerOptions } from './config';
 const configDir = path.resolve('./my-folder');
 const options: ChatServerOptions = {
   chats: [{
-    messager: { type: 'wechat' },
+    messager: { name: 'wechat', replyer: 'my-provider/my-model-id' },
     filters: [{ type: 'ignore-sender', options: { file: 'wechat_ignore' } }]
   }]
 };
@@ -377,6 +414,86 @@ await server.close();
 `IgnoreSenderFilter` also accepts a fixed string array for simple cases.
 `AllowAllFilter` is a minimal reference implementation. Adapters are plain objects, so
 custom filters need only implement `shouldReply` in their own module.
+
+### Runtime models
+
+Both `messager.replyer` and a model filter's `model` use `<provider>/<model id>`.
+The provider name and the **actual model ID**, rather than its CLI display name,
+must exist in `models.json` in the same config directory. The first slash separates
+the provider, so model IDs may themselves contain slashes. Existing messager configs
+must replace `type` with `name` and add `replyer`.
+
+At startup, ChatServer validates the referenced providers/models and loads each
+provider's API key once. The key comes from `CHATSERVER_MODEL_API_KEY` when set,
+otherwise from the OS credential manager, using the same provider accounts as
+`chatserver-models`. The environment override applies to all providers. No model
+requests are sent during startup; they are made only for incoming messages.
+
+The runtime uses the existing Responses API compatible client. A model filter is
+instructed to return exactly `allowed`, `denied`, or `optional`. The reply model
+returns JSON with `reply` (boolean) and `text` (string). On an optional filter outcome,
+`reply: false` suppresses the response; an allowed outcome requires a nonempty reply.
+Malformed replies and provider errors are logged without sending fallback text.
+
+Requests include the current message text, sender ID, and channel. Conversations
+are currently stateless: prior messages and attachments are not sent to the model.
+Individual model requests have a 60-second timeout; replies using tools have a
+120-second overall deadline. Requests are cancelled during server shutdown. Failed
+model requests and sends are not retried automatically.
+
+### Replier tools
+
+Repliers use application-managed function calling: the model requests a function,
+ChatServer executes it, and the result is sent back to the model until it produces
+the final reply JSON. No provider-hosted search tools are used. Providers and models
+must support Responses API function calls and function-call outputs. Intermediate
+output items, including reasoning, are preserved within each reply; they are not
+retained as conversation history. See the [function-calling documentation](https://developers.openai.com/api/docs/guides/function-calling).
+
+All four tools are enabled by default. Select a subset with `messager.tools`, or
+set it to `[]` to disable tool calling for that replier:
+
+```json
+{
+  "name": "wechat",
+  "replyer": "my-provider/my-model-id",
+  "tools": ["web_search", "read_url", "calculate", "current_time"],
+  "options": { "tokenEnv": "AGENT_WECHAT_TOKEN" }
+}
+```
+
+| Tool | Arguments | Behavior |
+| ---- | --------- | -------- |
+| `web_search` | `query` | DuckDuckGo; up to five titles, source URLs, and snippets |
+| `read_url` | `url` | Title, final URL, and up to 20,000 characters of page text |
+| `calculate` | `expression` | Floating-point arithmetic and selected math functions |
+| `current_time` | `timezone` | Current UTC and local time; IANA zone or `null` for UTC |
+
+Search uses [DuckDuckGo's non-JavaScript HTML results](https://duckduckgo.com/duckduckgo-help-pages/features/non-javascript),
+without an API key. This is HTML parsing rather than a guaranteed search API;
+rate limits, bot challenges, and page changes can make searches fail. Such failures
+are returned to the model as errors. `WebSearchTool` accepts a `WebSearchProvider`
+implementation so a different backend can be supplied later. Applications can
+replace the default factory with `registerTool('web_search', factory)` before startup.
+
+`read_url` supports HTML, plain text, Markdown, and JSON, including gzip, deflate,
+and Brotli compression. It does not execute JavaScript, use cookies, log in, or
+read PDFs. HTTP(S) requests are limited to public addresses on ports 80/443;
+private/local destinations and redirects to them are rejected. Each download has
+a 15-second deadline, five-redirect limit, and 1 MiB transfer/decoded size limits.
+Retrieved pages are treated as source data; repliers are instructed to cite URLs
+in their response text.
+
+`calculate` supports `+ - * / % ^ **`, parentheses, scientific notation, `pi`, `e`,
+`sqrt`, `abs`, `sin`, `cos`, `tan`, `floor`, `ceil`, `round`, `ln`, `log`, `exp`,
+`min`, `max`, and `pow`. Trigonometry uses radians, `log` is base 10, and `%` is
+modulo. Expressions are limited to 1,000 characters and 256 tokens. JavaScript and
+property access are not supported.
+
+Tool execution is limited to eight calls per reply, with at most eight tool rounds
+and one final answer request. Arguments and results are size-limited; errors are
+sent back to the model rather than exposed as successful results. Filters do not
+receive tools. Tool work is cancelled on server shutdown.
 
 ## Models
 

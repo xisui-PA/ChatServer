@@ -1,3 +1,8 @@
+import { ToolDefinition } from '../tools/interface';
+
+/** A Responses API input/output item, preserved across tool round trips. */
+export type ResponseItem = Record<string, unknown>;
+
 /**
  * Options for a single OpenAI Responses API call.
  */
@@ -9,13 +14,19 @@ export interface ResponseRequest {
   /** Bearer token used for authorization. */
   apiKey: string;
   /** Prompt or conversation input sent as `input`. */
-  input: string;
+  input: string | readonly ResponseItem[];
+  /** Application-managed function declarations available during generation. */
+  tools?: readonly ToolDefinition[];
+  /** Disable further tool calls when the per-reply budget has been consumed. */
+  toolChoice?: 'auto' | 'none';
   /** Optional system instructions. */
   instructions?: string;
   /** Extra request headers. */
   headers?: Record<string, string>;
   /** Request timeout in milliseconds. Defaults to 60 seconds. */
   timeoutMs?: number;
+  /** Optional caller cancellation, in addition to the request timeout. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -100,6 +111,11 @@ export async function createResponse(request: ResponseRequest): Promise<Response
   const url = responsesEndpoint(request.baseUrl);
   const timeoutMs = request.timeoutMs ?? 60_000;
   const controller = new AbortController();
+  const cancel = () => controller.abort();
+  request.signal?.addEventListener('abort', cancel, { once: true });
+  if (request.signal?.aborted) {
+    controller.abort();
+  }
   const timer = setTimeout(() => {
     controller.abort();
   }, timeoutMs);
@@ -108,6 +124,13 @@ export async function createResponse(request: ResponseRequest): Promise<Response
     model: request.model,
     input: request.input
   };
+  if (request.tools !== undefined && request.tools.length > 0) {
+    body.tools = request.tools;
+    body.tool_choice = request.toolChoice ?? 'auto';
+    // Replay the complete output locally, including any encrypted reasoning.
+    body.store = false;
+    body.include = ['reasoning.encrypted_content'];
+  }
   if (request.instructions !== undefined) {
     body.instructions = request.instructions;
   }
@@ -147,6 +170,9 @@ export async function createResponse(request: ResponseRequest): Promise<Response
       );
     }
 
+    if (isRecord(parsed) && ((parsed.error !== undefined && parsed.error !== null) || parsed.status === 'failed' || parsed.status === 'incomplete')) {
+      throw new ResponsesApiError(`Response from ${url} did not complete successfully.`, response.status);
+    }
     const result: ResponseResult = { outputText: extractOutputText(parsed), raw: parsed };
     if (isRecord(parsed) && typeof parsed.id === 'string') {
       result.id = parsed.id;
@@ -156,11 +182,15 @@ export async function createResponse(request: ResponseRequest): Promise<Response
     if (error instanceof ResponsesApiError) {
       throw error;
     }
+    if (request.signal?.aborted) {
+      throw new ResponsesApiError(`Request to ${url} was cancelled.`);
+    }
     if ((error as Error).name === 'AbortError') {
       throw new ResponsesApiError(`Request to ${url} timed out after ${timeoutMs} ms.`);
     }
     throw new ResponsesApiError(`Request to ${url} failed: ${(error as Error).message}`);
   } finally {
     clearTimeout(timer);
+    request.signal?.removeEventListener('abort', cancel);
   }
 }

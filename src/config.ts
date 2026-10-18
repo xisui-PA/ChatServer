@@ -2,11 +2,17 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { hasFilter, listFilters } from './filters/registry';
 import { hasMessager, listMessagers } from './messagers/registry';
+import { parseModelReference } from './models/reference';
+import { hasTool, listTools } from './tools/registry';
 
 /** Configuration for a registered messager implementation. */
 export interface MessagerSpec {
   /** Registered messager name, e.g. `wechat`. */
-  type: string;
+  name: string;
+  /** Reply model reference in <provider>/<model id> format. */
+  replyer: string;
+  /** Replier tool names; omitted enables the four built-in tools, [] disables them. */
+  tools?: readonly string[];
   /** Options passed to the messager factory. */
   options?: Readonly<Record<string, unknown>>;
 }
@@ -15,6 +21,8 @@ export interface MessagerSpec {
 export interface FilterSpec {
   /** Registered filter name, e.g. `ignore-sender`. */
   type: string;
+  /** Required for type "model": <provider>/<model id>. */
+  model?: string;
   /** Options passed to the filter factory. */
   options?: Readonly<Record<string, unknown>>;
 }
@@ -119,7 +127,7 @@ function warnUnknownKeys(record: Record<string, unknown>, known: readonly string
 }
 
 /**
- * Normalizes a messager/filter spec from either a shorthand string or an object.
+ * Normalizes filter fields from either a shorthand string or an object.
  */
 function parseSpecFields(value: unknown, where: string): {
   type: string;
@@ -138,7 +146,7 @@ function parseSpecFields(value: unknown, where: string): {
     );
   }
 
-  warnUnknownKeys(value, ['type', 'options'], where);
+  warnUnknownKeys(value, ['type', 'model', 'options'], where);
 
   if (typeof value.type !== 'string' || value.type.trim() === '') {
     throw new ConfigError(`${where}: "type" must be a non-empty string.`);
@@ -152,16 +160,47 @@ function parseSpecFields(value: unknown, where: string): {
   return { type: value.type.trim(), options };
 }
 
-/** Parses a messager specification and validates its registered name. */
+/** Validates the syntax of a model reference without reading models.json. */
+function modelReference(value: unknown, where: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new ConfigError(`${where} must be a non-empty <provider>/<model id> reference.`);
+  }
+  const reference = value.trim();
+  try {
+    parseModelReference(reference);
+  } catch (error) {
+    throw new ConfigError(`${where}: ${(error as Error).message}`);
+  }
+  return reference;
+}
+
+/** Parses the chat transport and its bound reply model. */
 function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
-  const messager = parseSpecFields(value, where);
-  if (!hasMessager(messager.type)) {
+  if (!isPlainObject(value)) {
+    throw new ConfigError(`${where} must be an object with "name", "replyer", and optional "options".`);
+  }
+  warnUnknownKeys(value, ['name', 'replyer', 'tools', 'options'], where);
+  if (typeof value.name !== 'string' || !value.name.trim()) {
+    throw new ConfigError(`${where}: "name" must be a non-empty registered messager name.`);
+  }
+  const name = value.name.trim();
+  if (!hasMessager(name)) {
     throw new ConfigError(
-      `${where}: unknown messager "${messager.type}". ` +
-        `Available: ${listMessagers().join(', ')}.`
+      `${where}: unknown messager "${name}". Available: ${listMessagers().join(', ')}.`
     );
   }
-  return messager;
+  const options = value.options ?? {};
+  if (!isPlainObject(options)) {
+    throw new ConfigError(`${where}: "options" must be an object.`);
+  }
+  let tools: string[] | undefined;
+  if (value.tools !== undefined) {
+    if (!Array.isArray(value.tools) || !value.tools.every((tool) => typeof tool === 'string' && hasTool(tool))) {
+      throw new ConfigError(`${where}.tools must be an array of registered tool names. Available: ${listTools().join(', ')}.`);
+    }
+    tools = [...new Set(value.tools as string[])];
+  }
+  return { name, replyer: modelReference(value.replyer, `${where}.replyer`), options, tools };
 }
 
 /** Parses a filter specification and validates its registered name. */
@@ -172,6 +211,12 @@ function parseFilterSpec(value: unknown, where: string): FilterSpec {
       `${where}: unknown filter "${filter.type}". ` +
         `Available: ${listFilters().join(', ')}.`
     );
+  }
+  if (filter.type === 'model') {
+    return { ...filter, model: modelReference(isPlainObject(value) ? value.model : undefined, `${where}.model`) };
+  }
+  if (isPlainObject(value) && value.model !== undefined) {
+    throw new ConfigError(`${where}: "model" is only supported for type "model".`);
   }
   return filter;
 }

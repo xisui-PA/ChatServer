@@ -3,6 +3,8 @@ import { AllowAllFilter } from './allow-all';
 import { IgnoreFile } from './ignore-file';
 import { IgnoreSenderFilter } from './ignore-sender';
 import { FilterAdapter } from './interface';
+import { ModelFilter } from './model';
+import { TextModel } from '../models/runtime';
 
 /**
  * Context passed to filter factories when a chat is created.
@@ -12,8 +14,12 @@ export interface FilterFactoryContext {
   chatName: string;
   /** Directory of the config file; relative data files resolve against it. */
   configDir: string;
-  /** Messager type used by the chat, e.g. `websocket`. */
+  /** Messager type used by the chat, e.g. `wechat`. */
   messagerType: string;
+  /** Bound model supplied for model filters. */
+  model?: TextModel;
+  /** Server shutdown cancellation for model requests. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -100,7 +106,7 @@ function stringOption(
 
 registerFilter('allow-all', () => new AllowAllFilter());
 
-registerFilter('ignore-sender', (options, context) => {
+const createIgnoreFilter: FilterFactory = (options, context) => {
   const label = `filter "ignore-sender" (chat "${context.chatName}")`;
 
   // Optional inline list, kept for quick overrides and backwards compatibility.
@@ -123,4 +129,20 @@ registerFilter('ignore-sender', (options, context) => {
   return new IgnoreSenderFilter({
     getSenderIds: async () => new Set([...(await ignoreFile.getSenderIds()), ...inlineSource.getSenderIds()])
   });
+};
+
+registerFilter('ignore', createIgnoreFilter);
+registerFilter('ignore-sender', createIgnoreFilter);
+
+registerFilter('model', (options, context) => {
+  if (context.model === undefined) {
+    throw new Error(`Model filter in chat "${context.chatName}" requires a bound model.`);
+  }
+  for (const key of Object.keys(options)) {
+    if (key !== 'instructions') {
+      throw new Error(`Model filter: unknown option "${key}".`);
+    }
+  }
+  const instructions = stringOption(options, 'instructions', 'model filter');
+  return new ModelFilter(context.model, instructions, context.signal);
 });
