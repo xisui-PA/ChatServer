@@ -8,7 +8,7 @@ import { hasMessager, listMessagers } from './messagers/registry';
  * A named implementation plus its config-file options.
  */
 export interface AdapterSpec {
-  /** Registered implementation name, e.g. `websocket` or `ignore-sender`. */
+  /** Registered implementation name, e.g. a messager name or `ignore-sender`. */
   type: string;
   /** Options passed to the implementation's factory. */
   options: Readonly<Record<string, unknown>>;
@@ -18,7 +18,7 @@ export interface AdapterSpec {
  * One chat pipeline: a messager plus the filters applied to inbound messages.
  */
 export interface ChatDefinition {
-  /** Unique chat name, used in logs and default WebSocket paths. */
+  /** Unique chat name, used in logs. */
   name: string;
   /** Messager implementation receiving and sending messages. */
   messager: AdapterSpec;
@@ -32,12 +32,6 @@ export interface ChatDefinition {
  * Resolved configuration values used at runtime.
  */
 export interface ChatServerConfig {
-  /** Address the HTTP/WebSocket server binds to. */
-  host: string;
-  /** TCP port the server listens on. */
-  port: number;
-  /** Default message sent to each client immediately after it connects. */
-  welcomeMessage: string;
   /** Chat pipelines served by this process. */
   chats: readonly ChatDefinition[];
 }
@@ -46,16 +40,7 @@ export interface ChatServerConfig {
  * Values used when the config file does not specify an option.
  */
 export const DEFAULT_CONFIG: ChatServerConfig = {
-  host: '0.0.0.0',
-  port: 3000,
-  welcomeMessage: 'Connected to ChatServer',
-  chats: [
-    {
-      name: 'main',
-      messager: { type: 'websocket', options: {} },
-      filters: []
-    }
-  ]
+  chats: []
 };
 
 /**
@@ -84,44 +69,14 @@ export interface LoadedConfig {
   values: ChatServerConfig;
   /** Path of the config file that was read. */
   configPath: string;
-  /**
-   * Folder the config lives in. Also holds `<messager>_ignore` files, so keeping it
-   * alongside the config keeps all per-user data in one place.
-   */
-  configDir: string;
   /** True when the file did not exist and a default one was written. */
   created: boolean;
 }
 
 export interface LoadConfigOptions {
-  /** Config folder containing `config.json` and optional `<messager>_ignore` files. */
-  configDir?: string;
-  /** Set to false to fail instead of creating a missing config file. */
+  /** Set to true to create a missing config file. Defaults to false. */
   createIfMissing?: boolean;
 }
-
-export const HELP_TEXT = `Usage: chatserver [options]
-
-Options:
-  -c, --config_dir <dir>  Config folder containing config.json and optional
-                          <messager>_ignore files.
-                          Defaults to the per-user config folder.
-      --print-config      Print the resolved configuration and exit
-  -h, --help              Show this help and exit
-
-Environment variables:
-  CHATSERVER_CONFIG_DIR    Config folder
-  CHATSERVER_HOST / HOST   Override the listen address
-  CHATSERVER_PORT / PORT   Override the listen port
-
-Default config folder:
-  macOS    ~/Library/Application Support/chatserver
-  Linux    $XDG_CONFIG_HOME/chatserver (~/.config by default)
-  Windows  %APPDATA%\\chatserver
-
-The folder contains config.json and may contain <messager>_ignore files, which the
-ignore-sender filter reads to decide which senders to ignore.
-`;
 
 /**
  * Returns the platform-appropriate per-user config folder.
@@ -254,10 +209,7 @@ function parseChat(value: unknown, index: number, seenNames: Set<string>): ChatD
   }
   seenNames.add(name);
 
-  const messager =
-    value.messager === undefined
-      ? { type: 'websocket', options: {} }
-      : parseAdapterSpec(value.messager, `${where}.messager`);
+  const messager = parseAdapterSpec(value.messager, `${where}.messager`);
 
   if (!hasMessager(messager.type)) {
     throw new ConfigError(
@@ -306,31 +258,9 @@ function validateConfig(input: unknown, configPath: string): ChatServerConfig {
 
   const config: ChatServerConfig = { ...DEFAULT_CONFIG };
 
-  if (record.host !== undefined) {
-    if (typeof record.host !== 'string' || record.host.trim() === '') {
-      throw new ConfigError(`${configPath}: "host" must be a non-empty string.`);
-    }
-    config.host = record.host.trim();
-  }
-
-  if (record.port !== undefined) {
-    if (typeof record.port !== 'number' || !Number.isInteger(record.port) ||
-      record.port < 1 || record.port > 65535) {
-      throw new ConfigError(`${configPath}: "port" must be an integer between 1 and 65535.`);
-    }
-    config.port = record.port;
-  }
-
-  if (record.welcomeMessage !== undefined) {
-    if (typeof record.welcomeMessage !== 'string') {
-      throw new ConfigError(`${configPath}: "welcomeMessage" must be a string.`);
-    }
-    config.welcomeMessage = record.welcomeMessage;
-  }
-
   if (record.chats !== undefined) {
-    if (!Array.isArray(record.chats) || record.chats.length === 0) {
-      throw new ConfigError(`${configPath}: "chats" must be a non-empty array.`);
+    if (!Array.isArray(record.chats)) {
+      throw new ConfigError(`${configPath}: "chats" must be an array.`);
     }
 
     const seenNames = new Set<string>();
@@ -365,47 +295,23 @@ async function readConfigFile(configPath: string): Promise<ChatServerConfig> {
  * Applies environment variable overrides on top of the config file values.
  */
 export function applyEnvironment(config: ChatServerConfig): ChatServerConfig {
-  const resolved = { ...config };
-
-  const host = process.env.CHATSERVER_HOST ?? process.env.HOST;
-  if (host !== undefined) {
-    resolved.host = host;
-  }
-
-  const port = process.env.CHATSERVER_PORT ?? process.env.PORT;
-  if (port !== undefined) {
-    const parsedPort = Number(port);
-    if (!Number.isInteger(parsedPort) || parsedPort < 1 || parsedPort > 65535) {
-      throw new ConfigError(`Invalid port "${port}" in environment; expected 1-65535.`);
-    }
-    resolved.port = parsedPort;
-  }
-
-  const welcomeMessage = process.env.CHATSERVER_WELCOME_MESSAGE;
-  if (welcomeMessage !== undefined) {
-    resolved.welcomeMessage = welcomeMessage;
-  }
-
-  return resolved;
+  return { ...config };
 }
 
-/**
- * Loads the config folder's `config.json`, creating it only for the default folder.
- *
- * Precedence (highest first): environment variables, config file, built-in defaults.
- */
-export async function loadConfig(options: LoadConfigOptions = {}): Promise<LoadedConfig> {
-  const explicit = options.configDir ?? process.env.CHATSERVER_CONFIG_DIR;
-  const configDir = path.resolve(explicit ?? getDefaultConfigDir());
+/** Loads config.json from the directory selected at invocation. */
+export async function loadConfig(
+  configDir: string,
+  options: LoadConfigOptions = {}
+): Promise<LoadedConfig> {
   const configPath = path.join(configDir, 'config.json');
 
-  if (explicit !== undefined && !(await isDirectory(configDir))) {
+  if (!options.createIfMissing && !(await isDirectory(configDir))) {
     throw new ConfigError(`Config folder not found: ${configDir}`);
   }
 
   let created = false;
   if (!(await fileExists(configPath))) {
-    if (explicit !== undefined || options.createIfMissing === false) {
+    if (!options.createIfMissing) {
       throw new ConfigError(
         `Config file not found: ${configPath}. The config folder must contain config.json.`
       );
@@ -415,7 +321,7 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<Loade
   }
 
   const values = applyEnvironment(await readConfigFile(configPath));
-  return { values, configPath, configDir, created };
+  return { values, configPath, created };
 }
 
 /**

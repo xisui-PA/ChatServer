@@ -1,7 +1,7 @@
 {
   "name": "chatserver",
   "version": "1.0.0",
-  "description": "A simple WebSocket chat server built with TypeScript",
+  "description": "A bridge between messager apps and LLM models built with TypeScript",
   "main": "dist/index.js",
   "bin": {
     "chatserver": "dist/index.js",
@@ -29,18 +29,14 @@
   },
   "keywords": [
     "chat",
-    "websocket",
+    "llm",
     "typescript",
-    "server"
+    "bridge"
   ],
   "license": "MIT",
-  "dependencies": {
-    "ws": "^8.17.0"
-  },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
     "@types/node": "^20.11.0",
-    "@types/ws": "^8.5.10",
     "eslint": "^9.39.5",
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-jsdoc": "^65.3.11",

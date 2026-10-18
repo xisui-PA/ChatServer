@@ -46,11 +46,6 @@ module.exports = (env, argv) => {
         },
       ],
     },
-    externals: {
-      // Optional native accelerators used by `ws`; loaded at runtime if installed.
-      bufferutil: 'commonjs bufferutil',
-      'utf-8-validate': 'commonjs utf-8-validate',
-    },
     optimization: {
       // Keep the server bundle readable and fast to build.
       minimize: false,

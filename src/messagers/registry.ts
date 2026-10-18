@@ -1,24 +1,16 @@
-import { Server } from 'node:http';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { MessagerAdapter } from './interface';
-import { WebSocketHub, WebSocketMessagerAdapter } from './websocket';
+import { WechatMessagerAdapter } from './wechat';
 
 /**
  * Context passed to messager factories when a chat is created.
  */
 export interface MessagerFactoryContext {
-  /** HTTP server the messager may attach to. */
-  server: Server;
   /** Name of the chat the messager belongs to, used in error messages. */
   chatName: string;
-  /** Fallback welcome message from the top-level config. */
-  welcomeMessage?: string;
-  /**
-   * Path to use when the chat does not set one explicitly.
-   * Assigned when multiple chats share the same HTTP server.
-   */
-  defaultPath?: string;
-  /** Shared WebSocket router, required when several chats share one HTTP server. */
-  hub?: WebSocketHub;
+  /** Folder containing configuration and adapter data files. */
+  configDir: string;
 }
 
 /**
@@ -67,38 +59,41 @@ export function createMessager(
   return factory(options, context);
 }
 
-/**
- * Reads an optional string option.
- */
-function stringOption(
-  options: Readonly<Record<string, unknown>>,
-  key: string,
-  label: string
-): string | undefined {
-  const value = options[key];
-  if (value === undefined) {
-    return undefined;
+registerMessager('wechat', (options, context) => {
+  const label = `messager "wechat" (chat "${context.chatName}")`;
+  const known = ['baseUrl', 'tokenEnv', 'tokenFile', 'chatIds', 'pollIntervalMs', 'timeoutMs'];
+  for (const key of Object.keys(options)) {
+    if (!known.includes(key)) {
+      throw new Error(`${label}: unknown option "${key}".`);
+    }
   }
-  if (typeof value !== 'string') {
-    throw new Error(`${label}: option "${key}" must be a string.`);
+  for (const key of ['baseUrl', 'tokenEnv', 'tokenFile']) {
+    if (options[key] !== undefined &&
+      (typeof options[key] !== 'string' || options[key].trim() === '')) {
+      throw new Error(`${label}: option "${key}" must be a non-empty string.`);
+    }
   }
-  return value;
-}
-
-registerMessager('websocket', (options, context) => {
-  const label = `messager "websocket" (chat "${context.chatName}")`;
-  const path = stringOption(options, 'path', label);
-  const welcomeMessage =
-    stringOption(options, 'welcomeMessage', label) ?? context.welcomeMessage;
-
-  if (path !== undefined && !path.startsWith('/')) {
-    throw new Error(`${label}: option "path" must start with "/".`);
+  for (const key of ['pollIntervalMs', 'timeoutMs']) {
+    if (options[key] !== undefined && typeof options[key] !== 'number') {
+      throw new Error(`${label}: option "${key}" must be a number.`);
+    }
   }
-
-  return new WebSocketMessagerAdapter({
-    server: context.server,
-    hub: context.hub,
-    path: path ?? context.defaultPath ?? '/',
-    welcomeMessage
+  if (options.chatIds !== undefined && (!Array.isArray(options.chatIds) ||
+    !options.chatIds.every((id) => typeof id === 'string' && id.trim() !== ''))) {
+    throw new Error(`${label}: option "chatIds" must be an array of non-empty strings.`);
+  }
+  const tokenEnv = options.tokenEnv as string | undefined ?? 'AGENT_WECHAT_TOKEN';
+  let token = process.env[tokenEnv]?.trim() ?? '';
+  if (!token && options.tokenFile !== undefined) {
+    token = readFileSync(path.resolve(context.configDir, options.tokenFile as string), 'utf8').trim();
+  }
+  if (!token) {
+    throw new Error(`${label}: bearer token is missing. Set ${tokenEnv} or tokenFile.`);
+  }
+  return new WechatMessagerAdapter(token, {
+    baseUrl: options.baseUrl as string | undefined,
+    chatIds: options.chatIds as string[] | undefined,
+    pollIntervalMs: options.pollIntervalMs as number | undefined,
+    timeoutMs: options.timeoutMs as number | undefined
   });
 });

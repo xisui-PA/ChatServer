@@ -1,6 +1,6 @@
-import { Server } from 'node:http';
-import { createChatServer } from './server';
-import { CliOptions, ConfigError, HELP_TEXT, LoadedConfig, loadConfig, parseArgs } from './config';
+import path from 'node:path';
+import { ChatServer, createChatServer } from './server';
+import { CliOptions, ConfigError, LoadedConfig, getDefaultConfigDir, loadConfig, parseArgs } from './config';
 
 /**
  * Reports an error to stderr and marks the process as failed.
@@ -19,9 +19,12 @@ function reportError(error: unknown): void {
 /**
  * Loads the effective configuration or returns undefined after reporting an error.
  */
-async function tryLoadConfig(cli: CliOptions): Promise<LoadedConfig | undefined> {
+async function tryLoadConfig(
+  configDir: string,
+  createIfMissing: boolean
+): Promise<LoadedConfig | undefined> {
   try {
-    return await loadConfig({ configDir: cli.configDir });
+    return await loadConfig(configDir, { createIfMissing });
   } catch (error) {
     reportError(error);
     return undefined;
@@ -31,14 +34,38 @@ async function tryLoadConfig(cli: CliOptions): Promise<LoadedConfig | undefined>
 /**
  * Creates the server, reporting adapter construction errors instead of throwing.
  */
-function tryCreateServer(options: Parameters<typeof createChatServer>[0]): Server | undefined {
+async function tryCreateServer(
+  options: Parameters<typeof createChatServer>[0],
+  configDir: string
+): Promise<ChatServer | undefined> {
   try {
-    return createChatServer(options);
+    return await createChatServer(options, configDir);
   } catch (error) {
     reportError(error);
     return undefined;
   }
 }
+
+const HELP_TEXT = `Usage: chatserver [options]
+
+Options:
+  -c, --config_dir <dir>  Config folder containing config.json and optional
+                          <messager>_ignore files.
+                          Defaults to the per-user config folder.
+      --print-config      Print the resolved configuration and exit
+  -h, --help              Show this help and exit
+
+Environment variables:
+  CHATSERVER_CONFIG_DIR    Config folder
+
+Default config folder:
+  macOS    ~/Library/Application Support/chatserver
+  Linux    $XDG_CONFIG_HOME/chatserver (~/.config by default)
+  Windows  %APPDATA%\\chatserver
+
+The folder contains config.json and may contain <messager>_ignore files, which the
+ignore-sender filter reads to decide which senders to ignore.
+`;
 
 async function main(): Promise<void> {
   let cli: CliOptions;
@@ -54,7 +81,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  const config = await tryLoadConfig(cli);
+  const explicitConfigDir = cli.configDir ?? process.env.CHATSERVER_CONFIG_DIR;
+  const configDir = path.resolve(explicitConfigDir ?? getDefaultConfigDir());
+  const config = await tryLoadConfig(configDir, explicitConfigDir === undefined);
   if (config === undefined) {
     return;
   }
@@ -64,7 +93,7 @@ async function main(): Promise<void> {
       JSON.stringify(
         {
           configPath: config.configPath,
-          configDir: config.configDir,
+          configDir,
           config: config.values
         },
         null,
@@ -77,33 +106,23 @@ async function main(): Promise<void> {
   if (config.created) {
     console.log(`[config] created ${config.configPath} with default values`);
   }
-  console.log(`[config] using ${config.configPath} (folder: ${config.configDir})`);
+  console.log(`[config] using ${config.configPath} (folder: ${configDir})`);
 
-  const { host, port, welcomeMessage, chats } = config.values;
+  const { chats } = config.values;
 
-  const server = tryCreateServer({
-    chats,
-    welcomeMessage,
-    configDir: config.configDir
-  });
+  const server = await tryCreateServer({ chats }, configDir);
   if (server === undefined) {
     return;
   }
 
-  server.on('error', (error) => {
-    reportError(error);
-  });
+  console.log(`ChatServer started with ${chats.length} chat pipeline(s)`);
 
-  server.listen(port, host, () => {
-    console.log(`ChatServer listening on http://${host}:${port}`);
-  });
-
-  /**
-   * Gracefully stop the server on Ctrl+C / SIGTERM.
-   */
+  /** Gracefully stop adapters on Ctrl+C / SIGTERM. */
   const shutdown = () => {
+    process.off('SIGINT', shutdown);
+    process.off('SIGTERM', shutdown);
     console.log('\nShutting down ChatServer...');
-    server.close(() => process.exit(0));
+    void server.close().catch(reportError);
   };
 
   process.on('SIGINT', shutdown);
