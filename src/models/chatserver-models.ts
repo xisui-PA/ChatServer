@@ -17,10 +17,10 @@ Manage OpenAI Responses API compatible providers and models. Provider details li
 under the provider name.
 
 Commands:
-  add            Add a model to a provider and store the provider's API key
+  add            Add a model (guided setup when options are omitted)
   test           Send a prompt to a configured model
   list           List configured providers and models
-  update         Change provider or model details, or rotate a provider's API key
+  update         Edit provider/model settings (guided editor without edits)
   remove         Remove a model (and its provider once empty)
 
 Common options:
@@ -28,6 +28,7 @@ Common options:
   -h, --help           Show help for a command
 
 Run "chatserver-models <command> --help" for command-specific options.
+Run "chatserver-models add" or "chatserver-models update" for guided terminal setup.
 `;
 
 async function main(): Promise<void> {

@@ -803,6 +803,20 @@ account, so every model from the same provider shares one key.
 
 ### Add a model
 
+For guided setup, run:
+
+```bash
+npm run model:add
+```
+
+Choose a saved provider or enter a new provider name and API base URL. The CLI
+reuses saved credentials, lists model IDs advertised by the provider's `/models`
+endpoint, and lets you select a model or enter an ID manually. If listing is
+unsupported, fails, or takes more than ten seconds, enter the model ID directly.
+The model's CLI name defaults to its ID. No generation request is made.
+
+You can also supply some or all details as flags:
+
 ```bash
 npm run model:add -- \
   --provider openai \
@@ -816,8 +830,15 @@ creating a provider. An existing provider's base URL,
 timeout, and API key are kept unless you pass `--base-url`, `--timeout`, or `--api-key`.
 When the provider has no
 stored key, the key is read from `--api-key`, then `OPENAI_API_KEY`, then an interactive
-prompt (input is hidden). Existing models are only replaced with `--force` or by
-confirming the prompt.
+prompt (input is hidden). `OPENAI_API_KEY` does not replace an existing saved key;
+use `--api-key` explicitly to rotate it. Existing models are only replaced with
+`--force` or by confirming the prompt. Keys and configuration are saved only after
+input validation and any overwrite confirmation.
+
+Use `--interactive` (`-i`) to request optional prompts even when provider/model flags
+are supplied. Without a terminal, all required values must be supplied as flags;
+the command will not wait for input or fetch the provider's model list. The saved
+model's `<provider>/<model id>` reference is printed for use in `config.json`.
 
 `models.json` holds non-secret details:
 
@@ -876,6 +897,12 @@ The key comes from `CHATSERVER_MODEL_API_KEY` or the credential manager.
 
 ### List, update, and remove
 
+Run `npm run model:update` for the guided editor: choose a provider, then provider
+settings (URL, timeout, hidden API key) or a model (ID and CLI name). Press Enter to
+keep a current value; an unchanged edit does not rewrite the file. No credentials
+are changed if model validation fails. Changing a model ID prints the corresponding
+`config.json` reference to update; renaming its CLI alias leaves that reference intact.
+
 ```bash
 npm run model:list --
 
@@ -892,10 +919,12 @@ When `remove` deletes a provider's last model, the provider entry is removed too
 API key is deleted from the credential manager.
 
 `list` prints a table with provider, model name, model id, timeout, and base URL; add `--json` for
-raw JSON. `update` only changes the options you pass and fails when none are given.
+raw JSON. Flag-based `update` changes only supplied options. Without a terminal,
+it fails when no edits are given; use `--interactive` to open the editor explicitly
+in a terminal.
 
 When installed as a CLI the binary is `chatserver-models`, for example
-`chatserver-models add --model gpt-4.1-mini`.
+`chatserver-models add` for guided setup.
 
 ## Installing as a CLI (npx)
 
