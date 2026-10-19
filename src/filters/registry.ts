@@ -17,6 +17,8 @@ export interface FilterFactoryContext {
   messagerType: string;
   /** Bound model supplied for model filters. */
   model?: TextModel;
+  /** Configured provider/model reference, used to identify model filters in logs. */
+  modelReference?: string;
   /** Server shutdown cancellation for model requests. */
   signal?: AbortSignal;
 }
@@ -141,5 +143,5 @@ registerFilter('model', (options, context) => {
     }
   }
   const instructions = stringOption(options, 'instructions', 'model filter');
-  return new ModelFilter(context.model, instructions, context.signal);
+  return new ModelFilter(context.model, instructions, context.signal, context.modelReference);
 });

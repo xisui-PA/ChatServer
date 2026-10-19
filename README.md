@@ -622,9 +622,12 @@ On an optional filter outcome,
 for supported requests. Filter and replier prompts ignore requests for image/video
 generation or modification and file summarization, generation, or modification.
 These exclusions override filter requirements; internal memory updates remain enabled.
-Malformed replies and provider errors are logged without sending fallback text.
-Malformed or missing internal memory updates are discarded with a warning; a valid
-public reply is still delivered.
+Malformed replies (including invalid or missing memory updates) are logged in full
+with the validation error, then sent back to the model for one reformat attempt
+using only the original output, validation error, and format requirements, without
+the conversation prompt or tools. Valid replies need no extra call. If the reformatted reply is still
+invalid, it is also logged and nothing is delivered or saved. Provider errors do
+not produce fallback chat text.
 
 Repliers aim for a soft limit of **150 tokens**, with a hard limit of **200 tokens**
 on the outgoing `text`, including URLs. The prompt favors a direct answer in 1–3
@@ -853,8 +856,9 @@ each attempt starts a fresh tool cycle. Individual HTTP/tool rounds have no
 separate retry loop, and exhausted retries do not trigger additional model retries
 in the conversation queue. Filter generations and `chatserver-models test` use
 the same policy. Each attempt gets the provider's `timeoutMs`; cancellation stops
-both active requests and retry waits. Other HTTP errors, malformed results, and
-message deliveries are not retried automatically.
+both active requests and retry waits. Other HTTP errors and message deliveries
+are not retried automatically. Malformed replier JSON uses the separate single
+reformat attempt described above; filter decisions are not reformatted.
 
 For a Mac model server on the local network, use its full Bonjour hostname, such
 as `http://xisui-m1m.local:1234/v1`, rather than relying on the short hostname.

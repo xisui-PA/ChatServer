@@ -126,6 +126,7 @@ export class ChatServer {
             configDir: this.configDir,
             messagerType: definition.messager.name,
             model: spec.model === undefined ? undefined : models.get(spec.model),
+            modelReference: spec.model,
             signal: this.shutdown.signal
           })
         )
