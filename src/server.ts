@@ -218,6 +218,7 @@ export class ChatServer {
           id: source.id ?? `message:${randomUUID()}`,
           text: source.text,
           senderId: source.senderId,
+          images: source.images,
           timestamp: source.timestamp && Number.isFinite(Date.parse(source.timestamp))
             ? new Date(Math.min(Date.now(), Date.parse(source.timestamp))).toISOString()
             : new Date().toISOString()

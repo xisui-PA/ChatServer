@@ -1,4 +1,5 @@
 import { IncomingMessage, MessageHandler, MessagerAdapter, MessagerStatus, OutgoingMessage } from './interface';
+import { imageDataUrl, MAX_ENCODED_IMAGE_BYTES } from './images';
 
 /** Options for the outbound-only agent-wechat REST adapter. */
 export interface WechatMessagerOptions {
@@ -44,7 +45,7 @@ function duration(value: number | undefined, fallback: number, label: string): n
   return result;
 }
 
-/** Receives text by polling agent-wechat; never opens a listening port. */
+/** Receives text and image references by polling agent-wechat; never listens on a port. */
 export class WechatMessagerAdapter implements MessagerAdapter {
   public readonly name = 'wechat';
   private readonly baseUrl: string;
@@ -129,9 +130,41 @@ export class WechatMessagerAdapter implements MessagerAdapter {
   }
 
   private requireActiveAccount(message: IncomingMessage): void {
-    if (this.handler === undefined || message.metadata?.wechatAccount !== this.account) {
+    this.requireAccount(message.metadata?.wechatAccount);
+  }
+
+  private requireAccount(account: unknown): void {
+    if (this.handler === undefined || typeof account !== 'string' || account !== this.account) {
       throw new Error('WeChat adapter is stopped or the originating account has changed.');
     }
+  }
+
+  /** Requests media only when the server processes its conversation, never during polling. */
+  private async loadImage(
+    chatId: string,
+    localId: number,
+    account: string | undefined,
+    signal?: AbortSignal
+  ): Promise<string | undefined> {
+    this.requireAccount(account);
+    const result = await this.request(
+      `/api/messages/${encodeURIComponent(chatId)}/media/${localId}?quality=best`,
+      undefined,
+      signal,
+      MAX_ENCODED_IMAGE_BYTES + 64 * 1024
+    );
+    this.requireAccount(account);
+    if (!isRecord(result) || typeof result.type !== 'string') {
+      throw new Error('Unexpected WeChat image media response.');
+    }
+    // Pending/expired media and URL-only responses are unavailable for this turn.
+    if (result.type !== 'image' || result.data === undefined || result.data === null) {
+      return undefined;
+    }
+    if (typeof result.data !== 'string') {
+      throw new Error('WeChat image data must be a base64 string.');
+    }
+    return imageDataUrl(result.data);
   }
 
   public getStatus(): MessagerStatus {
@@ -282,8 +315,8 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       const timestamp = Date.parse(message.timestamp);
       const alreadySeen = timestamp < cursor.timestamp ||
         (timestamp === cursor.timestamp && cursor.ids.has(message.localId));
-      const eligible = message.isSelf === false && message.type === 1 &&
-        message.content && message.sender;
+      const eligible = message.isSelf === false && message.sender &&
+        ((message.type === 1 && message.content) || message.type === 3);
       if (alreadySeen || !eligible) {
         // Even messages we don't deliver interrupt conversational adjacency.
         flush();
@@ -311,7 +344,8 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     if (first.sender === undefined) {
       return;
     }
-    const text = messages.map((message) => message.content).join('\n');
+    const account = this.account;
+    const text = messages.map((message) => message.type === 3 ? '[Image]' : message.content).join('\n');
     this.handler?.({
       text,
       senderId: first.sender,
@@ -319,9 +353,13 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       channel: chatId,
       messages: messages.map((message) => ({
         id: `message:${message.localId}`,
-        text: message.content,
+        text: message.type === 3 ? '[Image]' : message.content,
         senderId: message.sender as string,
-        timestamp: message.timestamp
+        timestamp: message.timestamp,
+        images: message.type === 3 ? [{
+          id: `image:${message.localId}`,
+          load: (signal?: AbortSignal) => this.loadImage(chatId, message.localId, account, signal)
+        }] : undefined
       })),
       metadata: {
         ...last,
@@ -344,7 +382,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     cursor.ids.add(message.localId);
   }
 
-  private async request(endpoint: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
+  private async request(endpoint: string, body?: unknown, signal?: AbortSignal, maxBytes?: number): Promise<unknown> {
     if (this.handler === undefined) {
       throw new Error('WeChat adapter is stopped.');
     }
@@ -366,7 +404,36 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       if (!response.ok) {
         throw new Error(`WeChat ${endpoint.split('?')[0]} returned HTTP ${response.status}.`);
       }
-      return await response.json() as unknown;
+      if (maxBytes === undefined) {
+        return await response.json() as unknown;
+      }
+      if (Number(response.headers.get('content-length')) > maxBytes) {
+        controller.abort();
+        throw new Error('WeChat image media response exceeds the size limit.');
+      }
+      if (response.body === null) {
+        throw new Error('WeChat image media response has no body.');
+      }
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            break;
+          }
+          size += chunk.value.byteLength;
+          if (size > maxBytes) {
+            controller.abort();
+            throw new Error('WeChat image media response exceeds the size limit.');
+          }
+          chunks.push(chunk.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);

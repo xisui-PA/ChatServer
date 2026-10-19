@@ -11,10 +11,10 @@ export interface GenerationOptions {
   reasoningEffort?: ResponseRequest['reasoningEffort'];
 }
 
-/** A configured model that accepts a prompt and returns text. */
+/** A configured model that accepts text or multimodal input and returns text. */
 export interface TextModel {
   generate(
-    input: string,
+    input: string | readonly ResponseItem[],
     instructions: string,
     signal?: AbortSignal,
     options?: GenerationOptions
@@ -30,7 +30,7 @@ class ProviderModel implements TextModel {
   ) {}
 
   public async generate(
-    input: string,
+    input: string | readonly ResponseItem[],
     instructions: string,
     signal?: AbortSignal,
     options: GenerationOptions = {}
@@ -65,14 +65,15 @@ class ProviderModel implements TextModel {
 
   /** Replays every output item, executes calls locally, and returns only final text. */
   private async generateWithTools(
-    input: string,
+    input: string | readonly ResponseItem[],
     instructions: string,
     tools: readonly Tool[],
     signal: AbortSignal,
     reasoningEffort: ResponseRequest['reasoningEffort']
   ): Promise<string> {
     const runner = new ToolRunner(tools);
-    const history: ResponseItem[] = [{ role: 'user', content: input }];
+    const history: ResponseItem[] = typeof input === 'string'
+      ? [{ role: 'user', content: input }] : [...input];
     const maxCalls = 8;
     let usedCalls = 0;
     const callIds = new Set<string>();

@@ -21,6 +21,7 @@ ChatServer/
 │   │   └── registry.ts         # Name → filter factory registry
 │   ├── messagers/
 │   │   ├── interface.ts        # MessagerAdapter interface and message types
+│   │   ├── images.ts           # Bounded image decoding and format validation
 │   │   ├── wechat.ts           # agent-wechat REST polling adapter
 │   │   └── registry.ts         # Name → messager factory registry
 │   ├── tools/
@@ -38,6 +39,7 @@ ChatServer/
 │   │   ├── model.ts            # ModelReplier: LLM replies and optional decisions
 │   │   └── limits.ts           # Soft/hard outgoing reply token limits
 │   ├── models/
+│   │   ├── conversation-input.ts # Shared text/image prompt construction
 │   │   ├── chatserver-models.ts # Unified CLI entry point and dispatcher
 │   │   ├── add.ts              # `add` command
 │   │   ├── test.ts             # `test` command
@@ -264,16 +266,16 @@ increase the delay exponentially, up to 64 times the configured interval; succes
 restores the normal interval. Missing database keys may still cause the upstream
 API to extract keys; the adapter cannot disable that upstream behavior.
 
-Only incoming text messages with an identified sender and `isSelf: false` enter
+Only incoming text and image messages with an identified sender and `isSelf: false` enter
 the pipeline. Messages from before adapter startup are skipped. Cursors and
 message deduplication are kept in memory; messages received while ChatServer is
 stopped are not replayed after restart. Keep the machines' clocks synchronized.
 Account changes reset the cursors and history cutoff.
 
-Within each poll, incoming text messages are bundled for dispatch when they are
+Within each poll, incoming text and image messages are bundled for dispatch when they are
 consecutive in the same conversation, have the same sender, and each timestamp is
 at most `bundleGapMs` after the previous message. This applies to direct chats and
-group/channel conversations. Another sender, a self message, or a skipped non-text
+group/channel conversations. Another sender, a self message, or an unsupported
 message ends the bundle. Messages in different conversations are never combined.
 The bundle is dispatched when processing that poll finishes; it does not wait for
 future polls.
@@ -307,8 +309,8 @@ so the next conversation can be processed immediately.
 
 Model processing and delivery remain sequential. Each send attempt consumes the
 slot, so another random delay is required before the next attempt. The delay is
-fixed in code and cannot be configured. Shutdown cancels pending delays. Media is
-not supported.
+fixed in code and cannot be configured. Shutdown cancels pending delays. Replies
+are text-only; incoming images are supported as described below.
 
 The random delay does not guarantee protection from WeChat account bans.
 Separate server instances do not share this in-memory limiter.
@@ -318,6 +320,44 @@ which would cause duplicate replies.
 The configured `replyer` generates the response. With `filters: []`, the reply model
 decides whether a response is useful. When filters are omitted or empty, filter
 evaluation is skipped entirely.
+
+### WeChat image input
+
+Incoming WeChat image messages (`type: 3`) enter the same conversation queue as
+text. They count toward the 30-message limit, and can be bundled with adjacent
+text from the same sender. Their text is represented as `[Image]`; the original
+message metadata is retained separately.
+
+Image bytes are retrieved lazily when a model filter or replier processes the
+snapshot, after the normal reply delay. Polling does not fetch media. The adapter
+uses `/api/messages/:chatId/media/:localId?quality=best`, with its bearer token
+kept on the agent-server request. Per the [upstream media implementation](https://github.com/thisnick/agent-wechat/blob/main/packages/agent-server-rust/src/router/messages.rs),
+this returns the best available cached image and may ask WeChat to download an
+advertised original. It does not open chats; missing database/image keys remain
+subject to the upstream server's extraction behavior.
+
+The latest **four images per snapshot**, each up to **5 MiB decoded**, are supplied
+as native Responses API `input_image` parts using base64 data URLs. PNG, JPEG,
+GIF, and WebP are recognized by their file signatures. Message IDs, senders, and
+timestamps identify which source message each image belongs to. Text-only turns
+retain ordinary text input. Model filters and the replier share the same downloaded
+image data for that turn, including across application-managed tool calls.
+
+Both the configured reply model and any model filters that receive images must
+support [image inputs](https://developers.openai.com/api/docs/guides/images-vision).
+GIF inputs remain subject to the provider's animation restrictions. Images beyond
+the snapshot limit are labeled omitted. Pending, expired, URL-only, oversized,
+unsupported-format, and failed media responses are labeled unavailable; other
+messages still proceed, and the model is instructed not to guess missing image
+contents. There is no automatic media retry loop; a later turn can attempt to load
+retained image references again. Video, voice, stickers, and file input are skipped.
+
+Image descriptions, visual questions, and OCR are supported. Prompts still exclude
+image/video generation and modification, and file summarization/generation/editing.
+Raw image data stays in the active model request rather than conversation memory
+files; the replier can retain concise visual observations as notes citing the
+original source message ID. Model input images do not count toward the outgoing
+150-token soft / 200-token hard text limit.
 
 ### Ignore list file
 
@@ -430,7 +470,7 @@ export interface MessagerAdapter {
 ```
 
 `IncomingMessage` carries normalized `text`, a `senderId`, an optional source `id`,
-`timestamp` and `channel`, ordered source `messages` for bundles/snapshots, pruned
+`timestamp` and `channel`, optional lazy `images`, ordered source `messages` for bundles/snapshots, pruned
 conversation `memory`, and adapter-specific `metadata`. A snapshot's top-level
 sender and routing metadata come from the latest arrival; its `messages` preserve
 each individual author and timestamp. Source IDs and timestamps are assigned by
@@ -529,7 +569,10 @@ reasoning. Unsupported settings fail closed through the existing filter error pa
 Replier calls retain the provider's default reasoning behavior. The reply model
 returns JSON with `reply` (boolean), `text` (string), and internal `memoryUpdates`.
 On an optional filter outcome,
-`reply: false` suppresses the response; an allowed outcome requires a nonempty reply.
+`reply: false` suppresses the response; an allowed outcome requires a nonempty reply
+for supported requests. Filter and replier prompts ignore requests for image/video
+generation or modification and file summarization, generation, or modification.
+These exclusions override filter requirements; internal memory updates remain enabled.
 Malformed replies and provider errors are logged without sending fallback text.
 
 Repliers aim for a soft limit of **150 tokens**, with a hard limit of **200 tokens**
@@ -540,7 +583,8 @@ provider-specific billing token counts may differ. These limits apply to deliver
 reply text, not the JSON envelope, memory notes, tool results, or internal reasoning.
 
 Requests include the current conversation snapshot, sender IDs, channel, and
-retained conversation memory. Attachments are not sent to the model.
+retained conversation memory, plus supported images as separate image parts.
+Other attachment types are not sent to the model.
 Individual model requests have a 60-second timeout; replies using tools have a
 120-second overall deadline. Requests are cancelled during server shutdown. Failed
 model requests and sends are not retried automatically.

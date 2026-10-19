@@ -1,5 +1,12 @@
 import { ConversationMemory } from '../conversations/interface';
 
+/** Lazily retrieves a base64 image data URL without exposing transport credentials. */
+export interface IncomingImage {
+  id: string;
+  /** Undefined means the image is not available from the transport yet. */
+  load(signal?: AbortSignal): Promise<string | undefined>;
+}
+
 /** One source message in a conversation, with its original author and time. */
 export interface ConversationMessage {
   /** Stable ID used by memory notes to cite this source message. */
@@ -10,6 +17,8 @@ export interface ConversationMessage {
   senderId: string;
   /** Original timestamp, when supplied by the adapter. */
   timestamp?: string;
+  /** Images belonging to this source message, loaded only for model processing. */
+  images?: readonly IncomingImage[];
 }
 
 /** A message or conversation snapshot normalized for the processing pipeline. */
