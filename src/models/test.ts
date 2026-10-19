@@ -9,6 +9,7 @@ import {
   requireProvider
 } from './command-support';
 import { createResponse } from './responses-client';
+import { withModelRetries } from './retry';
 
 /**
  * Help text for `chatserver-models test`.
@@ -60,13 +61,13 @@ export async function runTest(argv: string[]): Promise<void> {
 
   console.log(`Testing ${name} (${model.id}) via ${provider.provider} at ${provider.baseUrl}...`);
 
-  const result = await createResponse({
+  const result = await withModelRetries(() => createResponse({
     baseUrl: provider.baseUrl,
     model: model.id,
     apiKey,
     input: prompt,
     timeoutMs
-  });
+  }));
 
   if (hasFlag(cli, 'json')) {
     console.log(JSON.stringify(result.raw, null, 2));

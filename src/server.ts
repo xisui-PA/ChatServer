@@ -376,10 +376,7 @@ export class ChatServer {
               'processing/filter error (see server log)';
           this.lastProcessingErrorAt = new Date().toISOString();
           console.error(`[chat:${conversation.chat.name}] failed to process conversation:`, error);
-          const retryable = error instanceof PendingImagesError ||
-            (error instanceof ResponsesApiError && (error.status === undefined ||
-              error.status === 408 || error.status === 429 || error.status >= 500));
-          if (retryable && !conversation.hasPendingMessages) {
+          if (error instanceof PendingImagesError && !conversation.hasPendingMessages) {
             this.scheduleRetry(key, conversation);
           }
         }
@@ -401,7 +398,7 @@ export class ChatServer {
     this.replySlotReady = false;
   }
 
-  /** Retries preparation only; delivery attempts never enter this path. */
+  /** Retries pending media; model generations manage their own retry policy. */
   private scheduleRetry(key: string, conversation: ConversationState): void {
     if (conversation.retryAttempts >= 2 || this.closed) {
       return;

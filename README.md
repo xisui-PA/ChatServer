@@ -341,10 +341,12 @@ order, with their original senders and timestamps. There is no age cutoff.
 A successful reply clears only the messages in that snapshot. Messages received
 during generation or delivery are kept, and the conversation returns to the back
 of the queue. If filters deny the snapshot, the model declines, or processing
-fails, its bounded context is retained until a later successful reply. Timeouts,
-network errors, HTTP 408/429/5xx responses, and pending media can schedule up to two
-pre-delivery retries, after 30 and 60 seconds, at the FIFO tail. Each retry also
-respects normal send-slot pacing; other conversations can proceed while it waits.
+fails, its bounded context is retained until a later successful reply. Transient
+model failures get up to three retries of the complete generation, ten seconds
+apart, as described below. Exhausted model retries await new input rather than
+scheduling another conversation turn. Pending media can schedule up to two
+pre-delivery retries, after 30 and 60 seconds, at the FIFO tail, respecting normal
+send-slot pacing; other conversations can proceed while media waits.
 Permanent errors and ordinary filter/model declines await new input. Failed sends
 are never retried automatically because delivery may have succeeded remotely.
 A skipped conversation does not consume the send slot,
@@ -645,8 +647,8 @@ function-call/result pairs. If the latest round alone is too large, the final
 request omits tool history and reports that limitation to the model.
 Individual model requests use their provider's `timeoutMs` from `models.json`,
 defaulting to three minutes when omitted.
-For repliers using tools, the same setting also caps the entire generation,
-including all model/tool rounds. The clock starts when model generation begins,
+For repliers using tools, the same setting also caps each complete generation
+attempt, including all model/tool rounds. The clock starts when model generation begins,
 after the reply delay and image retrieval. Requests and scheduled retries are
 cancelled during server shutdown. Only transient failures before delivery are
 retried automatically, as described above; sends are never automatically retried.
@@ -756,7 +758,7 @@ in their response text.
 modulo. Expressions are limited to 1,000 characters and 256 tokens. JavaScript and
 property access are not supported.
 
-Tool execution is limited to eight calls per reply, with at most eight tool rounds
+Tool execution is limited to eight calls per generation attempt, with at most eight tool rounds
 and one final answer request. Arguments and results are size-limited; errors are
 sent back to the model rather than exposed as successful results. Filters do not
 receive tools. Tool work is cancelled on server shutdown.
@@ -842,19 +844,18 @@ Use `--timeout <ms>` with `add` or `update` to save the provider setting. Move a
 previous top-level `modelTimeoutMs` from `config.json` to the desired provider
 entries as `timeoutMs`; the server no longer reads model timeouts from `config.json`.
 
-Plain-HTTP model endpoints use fresh connections, prefer IPv4, and retain IPv6
-fallback. This avoids reusing closed sockets on local servers and reduces LAN
-address-selection differences between Windows and macOS. Transient transport
-failures get up to two immediate retries, after 500 ms and 1 second, sharing the
-same provider deadline. These retries repeat only the model HTTP request, not
-application tools or message delivery; the conversation queue's later retries
-still apply if processing ultimately fails. HTTP errors and invalid responses do
-not trigger immediate transport retries.
+Model requests use native `fetch`. Timeouts, network failures, and HTTP 408/429/5xx
+errors retry the complete model generation up to **three times**, with **10 seconds**
+between attempts: one initial attempt plus at most three retries. For repliers,
+each attempt starts a fresh tool cycle. Individual HTTP/tool rounds have no
+separate retry loop, and exhausted retries do not trigger additional model retries
+in the conversation queue. Filter generations and `chatserver-models test` use
+the same policy. Each attempt gets the provider's `timeoutMs`; cancellation stops
+both active requests and retry waits. Other HTTP errors, malformed results, and
+message deliveries are not retried automatically.
 
-Network errors include underlying codes such as `ECONNREFUSED`, `ECONNRESET`, or
-`ENOTFOUND`. If a `.local` hostname fails to resolve on Windows, use the serving
-Mac's LAN IPv4 address in `baseUrl`, keeping the port and `/v1` path. The serving
-Mac must listen on its LAN interface and allow connections through its firewall.
+For a Mac model server on the local network, use its full Bonjour hostname, such
+as `http://xisui-m1m.local:1234/v1`, rather than relying on the short hostname.
 
 ### Test a model
 

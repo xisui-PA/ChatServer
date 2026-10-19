@@ -5,6 +5,7 @@ import { createResponse, ResponseItem, ResponseRequest, ResponsesApiError, resol
 import { Tool } from '../tools/interface';
 import { ToolRunner } from '../tools/runner';
 import { assertInputBudget, boundedText, modelInputTokens, MODEL_INPUT_TOKENS, TOOL_RESULT_TOKENS } from './input-budget';
+import { withModelRetries } from './retry';
 
 /** Per-request generation settings; never mutate a shared model's defaults. */
 export interface GenerationOptions {
@@ -39,6 +40,17 @@ class ProviderModel implements TextModel {
   ): Promise<string> {
     const tools = options.tools ?? [];
     assertInputBudget(input, instructions, tools.map((tool) => tool.definition));
+    return withModelRetries(() => this.generateOnce(input, instructions, signal, options), signal);
+  }
+
+  /** Each attempt starts a fresh tool cycle and gets the provider's generation timeout. */
+  private async generateOnce(
+    input: string | readonly ResponseItem[],
+    instructions: string,
+    signal: AbortSignal | undefined,
+    options: GenerationOptions
+  ): Promise<string> {
+    const tools = options.tools ?? [];
     if (tools.length === 0) {
       const result = await createResponse({
         baseUrl: this.baseUrl,
