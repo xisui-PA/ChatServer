@@ -2,7 +2,6 @@ import { createCredentialStore } from './credentials';
 import { CliError, hasFlag, optionalValue, promptLine, requireValue, resolveConfigDir } from './cli-support';
 import { DEFAULT_TIMEOUT_MS, modelTimeoutOption, newApiKey, parseCommandOptions } from './command-support';
 import {
-  DEFAULT_BASE_URL,
   ensureProvider,
   findModel,
   findProvider,
@@ -23,8 +22,7 @@ Options:
   --provider <name>      Provider name, also the credential account (required)
   --model <id>           Model identifier sent to the API (required)
   --name <name>          Name used to refer to the model (default: the model id)
-  --base-url <url>       OpenAI-compatible base URL
-                         (default: ${DEFAULT_BASE_URL} for new providers)
+  --base-url <url>       OpenAI-compatible base URL (required for new providers)
   --api-key <key>        API key to store for the provider
   --timeout <ms>         Provider model timeout (default: ${DEFAULT_TIMEOUT_MS} for new providers)
   --config_dir <dir>     Config folder
@@ -61,16 +59,22 @@ export async function runAdd(argv: string[]): Promise<void> {
   const providerName = requireValue(cli, 'provider', '--provider');
   const modelId = requireValue(cli, 'model', '--model');
   const name = optionalValue(cli, 'name') ?? modelId;
-  const baseUrl = optionalValue(cli, 'baseUrl');
+  const baseUrl = optionalValue(cli, 'baseUrl')?.trim();
+  if (baseUrl === '') {
+    throw new CliError('--base-url must not be empty.');
+  }
   const timeoutValue = optionalValue(cli, 'timeout');
   const timeoutMs = timeoutValue === undefined ? undefined : modelTimeoutOption(timeoutValue);
   const file = await loadModels(configDir);
 
   const existingProvider = findProvider(file, providerName);
+  if (existingProvider === undefined && baseUrl === undefined) {
+    throw new CliError('--base-url is required when creating a provider.');
+  }
   const provider =
-    existingProvider ?? ensureProvider(file, providerName, baseUrl || DEFAULT_BASE_URL);
+    existingProvider ?? ensureProvider(file, providerName, requireValue(cli, 'baseUrl', '--base-url'));
 
-  if (existingProvider !== undefined && baseUrl !== undefined && baseUrl !== '') {
+  if (existingProvider !== undefined && baseUrl !== undefined) {
     provider.baseUrl = baseUrl;
   }
   if (timeoutMs !== undefined) {

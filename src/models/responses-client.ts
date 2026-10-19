@@ -1,4 +1,5 @@
 import { ToolDefinition } from '../tools/interface';
+import { describeNetworkError, postModelJson } from './http-client';
 
 export const DEFAULT_MODEL_TIMEOUT_MS = 180_000;
 
@@ -121,6 +122,12 @@ export function extractOutputText(payload: unknown): string {
  */
 export async function createResponse(request: ResponseRequest): Promise<ResponseResult> {
   const url = responsesEndpoint(request.baseUrl);
+  const displayUrl = new URL(url);
+  displayUrl.username = '';
+  displayUrl.password = '';
+  displayUrl.search = '';
+  displayUrl.hash = '';
+  const endpoint = displayUrl.toString();
   const timeoutMs = resolveModelTimeoutMs(request.timeoutMs);
   const controller = new AbortController();
   const cancel = () => controller.abort();
@@ -157,18 +164,12 @@ export async function createResponse(request: ResponseRequest): Promise<Response
   };
 
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
+    const response = await postModelJson(url, headers, JSON.stringify(body), controller.signal);
+    const text = response.text;
 
-    const text = await response.text();
-
-    if (!response.ok) {
+    if (response.status < 200 || response.status >= 300) {
       throw new ResponsesApiError(
-        `Request to ${url} failed with HTTP ${response.status} ${response.statusText}.`,
+        `Request to ${endpoint} failed with HTTP ${response.status} ${response.statusText}.`,
         response.status,
         text
       );
@@ -179,14 +180,14 @@ export async function createResponse(request: ResponseRequest): Promise<Response
       parsed = JSON.parse(text);
     } catch (error) {
       throw new ResponsesApiError(
-        `Response from ${url} was not valid JSON: ${(error as Error).message}`,
+        `Response from ${endpoint} was not valid JSON: ${(error as Error).message}`,
         response.status,
         text
       );
     }
 
     if (isRecord(parsed) && ((parsed.error !== undefined && parsed.error !== null) || parsed.status === 'failed' || parsed.status === 'incomplete')) {
-      throw new ResponsesApiError(`Response from ${url} did not complete successfully.`, response.status);
+      throw new ResponsesApiError(`Response from ${endpoint} did not complete successfully.`, response.status);
     }
     const result: ResponseResult = { outputText: extractOutputText(parsed), raw: parsed };
     if (isRecord(parsed) && typeof parsed.id === 'string') {
@@ -198,12 +199,20 @@ export async function createResponse(request: ResponseRequest): Promise<Response
       throw error;
     }
     if (request.signal?.aborted) {
-      throw new ResponsesApiError(`Request to ${url} was cancelled.`);
+      throw new ResponsesApiError(`Request to ${endpoint} was cancelled.`);
     }
-    if ((error as Error).name === 'AbortError') {
-      throw new ResponsesApiError(`Request to ${url} timed out after ${timeoutMs} ms.`);
+    if (controller.signal.aborted) {
+      throw new ResponsesApiError(`Request to ${endpoint} timed out after ${timeoutMs} ms.`);
     }
-    throw new ResponsesApiError(`Request to ${url} failed: ${(error as Error).message}`);
+    let detail = describeNetworkError(error);
+    for (const secret of [request.apiKey, ...Object.values(request.headers ?? {})]) {
+      if (secret) {
+        detail = detail.replaceAll(secret, '[redacted]');
+      }
+    }
+    const dnsHint = displayUrl.hostname.endsWith('.local') && /ENOTFOUND|EAI_AGAIN/.test(detail)
+      ? ' The .local hostname could not be resolved. Use the server\'s LAN IPv4 address in models.json if Windows mDNS resolution is unreliable.' : '';
+    throw new ResponsesApiError(`Request to ${endpoint} failed: ${detail}.${dnsHint}`);
   } finally {
     clearTimeout(timer);
     request.signal?.removeEventListener('abort', cancel);

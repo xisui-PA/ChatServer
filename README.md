@@ -236,7 +236,7 @@ model calls or additional API requests. It excludes message contents, credential
 and configuration paths. Delivery counters include status reports and reset on
 restart.
 
-Status queries share the conversation FIFO queue and normal random **2–5 minute**
+Status queries share the conversation FIFO queue and normal random **1–3 minute**
 delay. Repeated pending queries in the same conversation are coalesced. A report
 is sent directly to `mainAccount`, bypassing filters and the replier, and consumes
 the same send slot as an ordinary reply. Commands/reports stay out of model
@@ -333,7 +333,7 @@ configured pipelines. New messages update its context without changing its queue
 position. Conversations and context are isolated by pipeline and WeChat account.
 
 Before selecting a conversation and building its snapshot, the server waits a
-fresh random 2–5 minutes, including before the first reply. Polling continues
+fresh random 1–3 minutes, including before the first reply. Polling continues
 during the wait. Filters and the replier then see retained incoming and self messages
 since the last successful reply, capped at the latest 30 individual messages in
 order, with their original senders and timestamps. There is no age cutoff.
@@ -804,7 +804,8 @@ npm run model:add -- \
   --name gpt-mini
 ```
 
-The provider is created when it does not exist yet. An existing provider's base URL,
+The provider is created when it does not exist yet; `--base-url` is required when
+creating a provider. An existing provider's base URL,
 timeout, and API key are kept unless you pass `--base-url`, `--timeout`, or `--api-key`.
 When the provider has no
 stored key, the key is read from `--api-key`, then `OPENAI_API_KEY`, then an interactive
@@ -829,6 +830,8 @@ confirming the prompt.
 }
 ```
 
+Each provider must specify `baseUrl`; there is no default API endpoint.
+
 Each provider's optional `timeoutMs` applies to all its models, including model
 filters and repliers. It defaults to **180000 ms (3 minutes)** when omitted.
 Use a positive integer in milliseconds up to `2147483647`; for example, `300000`
@@ -838,6 +841,20 @@ is independent of the WeChat transport's `options.timeoutMs`.
 Use `--timeout <ms>` with `add` or `update` to save the provider setting. Move any
 previous top-level `modelTimeoutMs` from `config.json` to the desired provider
 entries as `timeoutMs`; the server no longer reads model timeouts from `config.json`.
+
+Plain-HTTP model endpoints use fresh connections, prefer IPv4, and retain IPv6
+fallback. This avoids reusing closed sockets on local servers and reduces LAN
+address-selection differences between Windows and macOS. Transient transport
+failures get up to two immediate retries, after 500 ms and 1 second, sharing the
+same provider deadline. These retries repeat only the model HTTP request, not
+application tools or message delivery; the conversation queue's later retries
+still apply if processing ultimately fails. HTTP errors and invalid responses do
+not trigger immediate transport retries.
+
+Network errors include underlying codes such as `ECONNREFUSED`, `ECONNRESET`, or
+`ENOTFOUND`. If a `.local` hostname fails to resolve on Windows, use the serving
+Mac's LAN IPv4 address in `baseUrl`, keeping the port and `/v1` path. The serving
+Mac must listen on its LAN interface and allow connections through its firewall.
 
 ### Test a model
 

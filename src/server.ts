@@ -226,8 +226,7 @@ export class ChatServer {
     }
     const sources = message.messages?.length ? message.messages : [message];
     const statusRequest = sources.find((source) => !source.isSelf && source.text.trim() === '/status' &&
-      chat.mainAccount !== undefined && source.senderId === chat.mainAccount &&
-      message.channel === chat.mainAccount);
+      chat.mainAccount !== undefined && source.senderId === chat.mainAccount);
     // Reserved commands cannot be interpreted by the LLM or disclose status in groups.
     const regularMessages = sources.filter((source) => source.text.trim() !== '/status');
     if (statusRequest === undefined && regularMessages.length === 0) {
@@ -316,7 +315,7 @@ export class ChatServer {
   private async processConversations(): Promise<void> {
     while (!this.closed && this.pending.size > 0) {
       if (!this.replySlotReady) {
-        await delay(randomInt(120_000, 300_001), undefined, { signal: this.shutdown.signal });
+        await delay(randomInt(60_000, 180_001), undefined, { signal: this.shutdown.signal });
         this.replySlotReady = true;
       }
       if (this.closed) {
@@ -512,7 +511,7 @@ export class ChatServer {
       `Deliveries: ${this.deliveries}; failures ${this.deliveryFailures}; last ${age(this.lastDeliveryAt)}`,
       `Adapter: ${chat.messager.name}${health === undefined ? '' : health.active ? ' active' : ' stopped'}; poll failures ${health?.consecutivePollFailures ?? 0}; failed chats ${health?.failedChats ?? 0}`,
       `Last poll: ${age(health?.lastSuccessfulPollAt)}; last poll error: ${age(health?.lastPollErrorAt)}`,
-      `Delay: 2–5m; memory: ${MEMORY_RETENTION_MS / (24 * 60 * 60 * 1000)} days/${MEMORY_TOKEN_LIMIT} tokens`
+      `Delay: 1–3m; memory: ${MEMORY_RETENTION_MS / (24 * 60 * 60 * 1000)} days/${MEMORY_TOKEN_LIMIT} tokens`
     ].join('\n');
     await this.deliverReply(chat, message, { text: limitReplyText(text), direct: true });
   }

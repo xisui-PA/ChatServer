@@ -3,11 +3,6 @@ import path from 'node:path';
 import { DEFAULT_MODEL_TIMEOUT_MS, resolveModelTimeoutMs } from './responses-client';
 
 /**
- * Default base URL for the OpenAI-compatible Responses API.
- */
-export const DEFAULT_BASE_URL = 'https://api.openai.com/v1';
-
-/**
  * Name of the file that holds model configurations inside the config folder.
  */
 export const MODELS_FILE_NAME = 'models.json';
@@ -31,7 +26,7 @@ export interface ModelEntry {
 export interface ProviderConfig {
   /** Provider name, also the credential manager account for its API key. */
   provider: string;
-  /** Base URL of the OpenAI-compatible API, without a trailing `/responses`. */
+  /** Required base URL of the OpenAI-compatible API, without a trailing `/responses`. */
   baseUrl: string;
   /** Timeout for this provider's model requests and tool cycles; defaults to 180000 ms. */
   timeoutMs?: number;
@@ -114,7 +109,7 @@ function parseProvider(value: unknown, index: number, modelsPath: string): Provi
     throw new ModelStoreError(`${where}: "provider" must be a non-empty string.`);
   }
 
-  const baseUrl = value.baseUrl ?? DEFAULT_BASE_URL;
+  const baseUrl = value.baseUrl;
   if (typeof baseUrl !== 'string' || baseUrl.trim() === '') {
     throw new ModelStoreError(`${where}: "baseUrl" must be a non-empty string.`);
   }
@@ -223,14 +218,17 @@ export function findProvider(file: ModelsFile, provider: string): ProviderConfig
 export function ensureProvider(
   file: ModelsFile,
   provider: string,
-  baseUrl: string = DEFAULT_BASE_URL
+  baseUrl: string
 ): ProviderConfig {
   const existing = findProvider(file, provider);
   if (existing !== undefined) {
     return existing;
   }
 
-  const created: ProviderConfig = { provider, baseUrl, timeoutMs: DEFAULT_MODEL_TIMEOUT_MS, models: [] };
+  if (!baseUrl.trim()) {
+    throw new ModelStoreError('A non-empty baseUrl is required to create a provider.');
+  }
+  const created: ProviderConfig = { provider, baseUrl: baseUrl.trim(), timeoutMs: DEFAULT_MODEL_TIMEOUT_MS, models: [] };
   file.providers.push(created);
   return created;
 }

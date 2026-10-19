@@ -35,6 +35,7 @@
       "additionalProperties": false,
       "required": [
         "provider",
+        "baseUrl",
         "models"
       ],
       "properties": {
@@ -50,8 +51,7 @@
           "type": "string",
           "format": "uri",
           "pattern": "^https?://",
-          "description": "Responses-compatible API base URL, without a trailing /responses.",
-          "default": "https://api.openai.com/v1"
+          "description": "Required Responses-compatible API base URL, without a trailing /responses. There is no default."
         },
         "timeoutMs": {
           "type": "integer",

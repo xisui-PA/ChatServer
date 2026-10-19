@@ -48,7 +48,7 @@ export async function runUpdate(argv: string[]): Promise<void> {
   const providerName = requireValue(cli, 'provider', '--provider');
   const { file, provider } = await requireProvider(configDir, providerName);
 
-  const newBaseUrl = optionalValue(cli, 'baseUrl');
+  const newBaseUrl = optionalValue(cli, 'baseUrl')?.trim();
   const timeoutValue = optionalValue(cli, 'timeout');
   const timeoutMs = timeoutValue === undefined ? undefined : modelTimeoutOption(timeoutValue);
   const apiKey = optionalValue(cli, 'apiKey');
