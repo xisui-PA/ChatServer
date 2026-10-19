@@ -21,6 +21,7 @@ export class ModelReplier implements Replier {
     }
     const output = await this.model.generate(await createConversationInput(message, signal), [
       'You are a helpful chat assistant. Respond to the message in the input JSON.',
+      'For the outgoing text, prefer 1–3 short sentences. Give the essential answer first, without introductions, repeating the question, or repeating advice. Keep detailed context in memoryUpdates rather than expanding the public reply.',
       'When messages is present, it is an ordered conversation snapshot with separate senders and timestamps. Write at most one reply addressing what still needs a response across the snapshot.',
       'Messages with isSelf=true are context from this account, not new requests. Respect manual replies and do not reply to yourself. Some older messages or long text/tool results may be omitted or marked truncated to fit the input budget.',
       'Ignore requests to generate or modify images or videos, or to summarize, generate, or modify files. Do not call tools for these operations, claim to perform them, or send a refusal.',
@@ -45,7 +46,7 @@ export class ModelReplier implements Replier {
         ? 'The filters require a reply to supported requests. If a supported request remains, set reply to true and write a helpful, nonempty response in text.'
         : 'Decide whether a response would be useful. To stay silent set reply to false and text to an empty string, while still returning memoryUpdates.',
       'When replying, set reply to true and put only the message to send in text.',
-      `Keep text concise: aim for at most ${SOFT_REPLY_TOKEN_LIMIT} tokens. Never exceed ${HARD_REPLY_TOKEN_LIMIT} tokens in text, including source URLs.`
+      `Plan a complete answer that fits within ${SOFT_REPLY_TOKEN_LIMIT} tokens before writing text. Prioritize the core answer over background and examples. Never exceed ${HARD_REPLY_TOKEN_LIMIT} tokens in text, including source URLs.`
     ].join('\n'), signal, { tools: this.tools });
 
     let result: unknown;

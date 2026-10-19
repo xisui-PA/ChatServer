@@ -627,8 +627,10 @@ Malformed or missing internal memory updates are discarded with a warning; a val
 public reply is still delivered.
 
 Repliers aim for a soft limit of **150 tokens**, with a hard limit of **200 tokens**
-on the outgoing `text`, including URLs. The prompt requests concise replies; any
-oversized reply is truncated locally before sending, preserving valid Unicode.
+on the outgoing `text`, including URLs. The prompt favors a direct answer in 1–3
+short sentences and asks the model to plan a complete answer within 150 tokens.
+There is no extra model generation to shorten replies. Text above 200 tokens is
+truncated locally before sending, preserving valid Unicode and memory updates.
 The application uses `o200k_base` tokenization consistently across providers, so
 provider-specific billing token counts may differ. These limits apply to delivered
 reply text, not the JSON envelope, memory notes, tool results, or internal reasoning.
