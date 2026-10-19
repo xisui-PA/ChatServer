@@ -263,7 +263,7 @@ function validateConfig(input: unknown, configPath: string): ChatServerOptions {
   }
 
   const record = input as Record<string, unknown>;
-  warnUnknownKeys(record, Object.keys(DEFAULT_CONFIG), configPath);
+  warnUnknownKeys(record, ['$schema', ...Object.keys(DEFAULT_CONFIG)], configPath);
 
   const config: ChatServerOptions = { ...DEFAULT_CONFIG };
 

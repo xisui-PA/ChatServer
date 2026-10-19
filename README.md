@@ -137,6 +137,40 @@ Default `config.json`:
 { "chats": [] }
 ```
 
+### JSON schemas
+
+[config.schema.json](schemas/config.schema.json) and
+[models.schema.json](schemas/models.schema.json) provide editor completion,
+descriptions, defaults, and validation for the built-in configuration formats.
+They are also included in the npm package's `schemas/` directory.
+
+Add a `$schema` property to each file, pointing to the corresponding schema on
+your machine. For example, `config.json`:
+
+```json
+{
+  "$schema": "file:///absolute/path/to/ChatServer/schemas/config.schema.json",
+  "chats": []
+}
+```
+
+For `models.json`, use `models.schema.json` instead:
+
+```json
+{
+  "$schema": "file:///absolute/path/to/ChatServer/schemas/models.schema.json",
+  "version": 1,
+  "providers": []
+}
+```
+
+Replace these example file URLs with your actual paths (encode spaces as `%20`).
+The server accepts `$schema` as editor metadata, and the model CLI preserves it
+when saving. Schemas flag unknown properties; runtime registration, model-reference
+resolution, and uniqueness of provider/model names are checked by the application.
+Extend the schemas when registering custom adapters or tools. Schema defaults are
+documentation/editor hints; the application still applies its own defaults.
+
 `chats` selects the message pipelines to run. Each configured chat must specify a
 registered messager. The `wechat` implementation is bundled. `ChatServerOptions`
 in `config.ts` defines this structure; each entry contains only `messager` and

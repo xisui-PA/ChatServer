@@ -43,6 +43,8 @@ export interface ProviderConfig {
  * Contents of `models.json`.
  */
 export interface ModelsFile {
+  /** Optional editor schema reference, preserved when the CLI saves this file. */
+  $schema?: string;
   version: 1;
   providers: ProviderConfig[];
 }
@@ -166,6 +168,10 @@ export async function loadModels(configDir: string): Promise<ModelsFile> {
     throw new ModelStoreError(`${modelsPath} must contain an object with a "providers" array.`);
   }
 
+  if (parsed.$schema !== undefined && typeof parsed.$schema !== 'string') {
+    throw new ModelStoreError(`${modelsPath}: "$schema" must be a string.`);
+  }
+
   const seen = new Set<string>();
   const providers = parsed.providers.map((provider, index) => {
     const config = parseProvider(provider, index, modelsPath);
@@ -178,7 +184,7 @@ export async function loadModels(configDir: string): Promise<ModelsFile> {
     return config;
   });
 
-  return { version: 1, providers };
+  return { ...(parsed.$schema === undefined ? {} : { $schema: parsed.$schema }), version: 1, providers };
 }
 
 /**
@@ -188,7 +194,11 @@ export async function loadModels(configDir: string): Promise<ModelsFile> {
  */
 export async function saveModels(configDir: string, file: ModelsFile): Promise<string> {
   const modelsPath = getModelsPath(configDir);
-  const payload: ModelsFile = { version: 1, providers: file.providers };
+  const payload: ModelsFile = {
+    ...(file.$schema === undefined ? {} : { $schema: file.$schema }),
+    version: 1,
+    providers: file.providers
+  };
 
   try {
     await fsp.mkdir(configDir, { recursive: true });

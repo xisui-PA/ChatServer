@@ -11,7 +11,7 @@ export interface WechatMessagerOptions {
   pollIntervalMs?: number;
   /** Timeout for each REST request. Defaults to 30000 ms. */
   timeoutMs?: number;
-  /** Maximum timestamp gap for consecutive-message bundles. Defaults to 10000 ms; 0 disables bundling. */
+  /** Maximum timestamp gap for consecutive-message bundles. Defaults to 20000 ms; 0 disables bundling. */
   bundleGapMs?: number;
 }
 
@@ -87,7 +87,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     this.baseUrl = url.toString().replace(/\/+$/, '');
     this.interval = duration(options.pollIntervalMs, 30000, 'pollIntervalMs');
     this.timeout = duration(options.timeoutMs, 30000, 'timeoutMs');
-    this.bundleGap = options.bundleGapMs === 0 ? 0 : duration(options.bundleGapMs, 10000, 'bundleGapMs');
+    this.bundleGap = options.bundleGapMs === 0 ? 0 : duration(options.bundleGapMs, 20000, 'bundleGapMs');
   }
 
   public async start(handler: MessageHandler): Promise<void> {

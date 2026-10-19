@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ChatServer model providers",
+  "description": "Non-secret provider and model settings in models.json. API keys belong in the OS credential manager or an environment override.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "providers"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Location of this JSON schema for editor validation and completion."
+    },
+    "version": {
+      "const": 1,
+      "description": "File format version. Defaults to 1 when omitted.",
+      "default": 1
+    },
+    "providers": {
+      "type": "array",
+      "description": "Provider names must be unique. The application checks name uniqueness and config.json model references at runtime.",
+      "items": {
+        "$ref": "#/definitions/provider"
+      }
+    }
+  },
+  "definitions": {
+    "nonEmptyString": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "models"
+      ],
+      "properties": {
+        "provider": {
+          "description": "Provider name, also used as its credential-manager account and the prefix of <provider>/<model id> references.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/nonEmptyString"
+            }
+          ]
+        },
+        "baseUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://",
+          "description": "Responses-compatible API base URL, without a trailing /responses.",
+          "default": "https://api.openai.com/v1"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "description": "Timeout in milliseconds for this provider's model requests. For repliers with tools, also caps the complete model/tool cycle.",
+          "default": 180000
+        },
+        "models": {
+          "type": "array",
+          "description": "Models offered by this provider. Model names must be unique within the provider.",
+          "items": {
+            "$ref": "#/definitions/model"
+          }
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "properties": {
+        "id": {
+          "description": "Model ID sent to the API and used after the first slash in config.json model references.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/nonEmptyString"
+            }
+          ]
+        },
+        "name": {
+          "description": "CLI display/lookup name. Defaults to id when omitted.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/nonEmptyString"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

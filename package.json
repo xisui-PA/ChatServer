@@ -8,7 +8,8 @@
     "chatserver-models": "dist/models/chatserver-models.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "schemas"
   ],
   "scripts": {
     "prepare": "npm run build",
