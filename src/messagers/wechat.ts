@@ -1,4 +1,4 @@
-import { IncomingMessage, MessageHandler, MessagerAdapter, OutgoingMessage } from './interface';
+import { IncomingMessage, MessageHandler, MessagerAdapter, MessagerStatus, OutgoingMessage } from './interface';
 
 /** Options for the outbound-only agent-wechat REST adapter. */
 export interface WechatMessagerOptions {
@@ -61,6 +61,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
   private polling?: Promise<void>;
   private sending: Promise<void> = Promise.resolve();
   private failures = 0;
+  private lastSuccessfulPollAt?: string;
 
   public constructor(token: string, private readonly options: WechatMessagerOptions = {}) {
     this.token = token.trim();
@@ -85,6 +86,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     this.startedAt = Date.now();
     this.cursors.clear();
     this.failures = 0;
+    this.lastSuccessfulPollAt = undefined;
     this.handler = handler;
     try {
       this.account = await this.readAccount();
@@ -132,6 +134,14 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     }
   }
 
+  public getStatus(): MessagerStatus {
+    return {
+      active: this.handler !== undefined,
+      lastSuccessfulPollAt: this.lastSuccessfulPollAt,
+      consecutivePollFailures: this.failures
+    };
+  }
+
   private schedule(delay: number): void {
     if (this.handler === undefined) {
       return;
@@ -139,6 +149,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     this.timer = setTimeout(() => {
       this.polling = this.poll().then(() => {
         this.failures = 0;
+        this.lastSuccessfulPollAt = new Date().toISOString();
       }).catch((error: unknown) => {
         if (this.handler !== undefined) {
           this.failures += 1;

@@ -146,7 +146,7 @@ Each entry in `chats` selects a registered messager and a list of filters by nam
 
 | Field | Type | Description |
 | ----- | ---- | ----------- |
-| `messager` | object | Required `name`, `replyer`; optional replier `tools` and transport `options`. |
+| `messager` | object | Required `name`, `replyer`; optional `mainAccount`, replier `tools`, and transport `options`. |
 | `filters` | array | Filters applied in order. Defaults to `[]` (no filter decision). |
 
 Messagers bind a chat-app transport to a reply model. Filters select an implementation
@@ -157,6 +157,7 @@ using `type`, with an additional `model` reference when `type` is `model`:
   "messager": {
     "name": "wechat",
     "replyer": "my-provider/my-model-id",
+    "mainAccount": "wxid_your_main_account",
     "tools": ["web_search", "read_url", "calculate", "current_time"],
     "options": { "tokenEnv": "AGENT_WECHAT_TOKEN" }
   },
@@ -178,6 +179,36 @@ Available implementations:
 | messager | `wechat` | `baseUrl`, `tokenEnv`, `tokenFile`, `chatIds`, `pollIntervalMs`, `timeoutMs`, `bundleGapMs` |
 | filter | `ignore` / `ignore-sender` | `file` (string), `senderIds` (string array) |
 | filter | `model` | Top-level `model` reference required; `options.instructions` customizes decision criteria |
+
+### Main account status queries
+
+Set optional `messager.mainAccount` to your personal account's exact sender ID as
+reported by the adapter (for WeChat, usually `wxid_...`, rather than a display name).
+The bot remains logged into its separate account. The setting belongs beside
+`name` and `replyer`, outside transport `options`; omitting it disables status access.
+
+Send the exact command `/status` in a direct chat from that account to the bot.
+The server authenticates both the sender ID and direct conversation ID. Queries
+from other accounts or in groups are silently ignored. Surrounding whitespace is
+accepted; commands are recognized individually even inside a message bundle.
+
+The report includes server uptime, pipeline count, queued conversations/messages,
+pending status requests, delivery/failure counts, last successful delivery, and
+the receiving adapter's cached polling health. It uses local observations without
+model calls or additional API requests. It excludes message contents, credentials,
+and configuration paths. Delivery counters include status reports and reset on
+restart.
+
+Status queries share the conversation FIFO queue and normal random **2–5 minute**
+delay. Repeated pending queries in the same conversation are coalesced. A report
+is sent directly to `mainAccount`, bypassing filters and the replier, and consumes
+the same send slot as an ordinary reply. Commands/reports stay out of model
+snapshots and conversation memory; buffered ordinary messages remain pending for
+a later turn. Failed reports await a new query rather than retrying automatically.
+
+WeChat automatically monitors the configured main account even when `chatIds`
+restricts other conversations. Other messages from this account use the regular
+filter/replier pipeline.
 
 ### WeChat adapter
 
@@ -222,7 +253,7 @@ The adapter itself does not read environment variables or token files.
 | `baseUrl` | `http://127.0.0.1:6174` | Agent server root URL, without `/api` |
 | `tokenEnv` | `AGENT_WECHAT_TOKEN` | Environment variable containing the bearer token |
 | `tokenFile` | unset | Token file used when the environment token is absent |
-| `chatIds` | all chats | Chat IDs to monitor; an empty array monitors none |
+| `chatIds` | all chats | Chat IDs to monitor, plus `mainAccount` when configured; an empty array monitors only `mainAccount`, or none when unset |
 | `pollIntervalMs` | `30000` | Delay in milliseconds after a completed poll |
 | `timeoutMs` | `30000` | Timeout in milliseconds for each request |
 | `bundleGapMs` | `10000` | Maximum gap between consecutive messages in a bundle; `0` disables bundling |
@@ -423,7 +454,9 @@ declined or failed turns retain context but await new arrivals before reprocessi
 A failure is logged and the queue continues. Snapshots and queue state are held
 in memory; summarized context and confirmed sent replies persist separately.
 Shutdown cancels active delay/model/send work and discards queued work.
-Messager factories receive `chatName` and `configDir` as context.
+Messager factories receive `chatName`, `configDir`, and optional `mainAccount` as
+context. Adapters may implement `getStatus()` to return cached local health for
+authorized status reports; it must not issue network requests.
 
 ### Filter adapter
 

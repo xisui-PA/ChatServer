@@ -44,6 +44,13 @@ export interface OutgoingMessage {
  */
 export type MessageHandler = (message: IncomingMessage) => void;
 
+/** Locally observed adapter health; reading it must not make network requests. */
+export interface MessagerStatus {
+  active: boolean;
+  lastSuccessfulPollAt?: string;
+  consecutivePollFailures?: number;
+}
+
 /**
  * Transport abstraction: receives messages from some source and sends replies back.
  *
@@ -67,6 +74,8 @@ export interface MessagerAdapter {
     reply: OutgoingMessage,
     signal?: AbortSignal
   ): void | Promise<void>;
+  /** Returns cached health information for authorized server status queries. */
+  getStatus?(): MessagerStatus;
   /** Releases transport resources. Called when the server closes. */
   stop?(): void | Promise<void>;
 }

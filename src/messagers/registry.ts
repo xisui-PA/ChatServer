@@ -11,6 +11,8 @@ export interface MessagerFactoryContext {
   chatName: string;
   /** Folder containing configuration and adapter data files. */
   configDir: string;
+  /** Optional controller account, monitored for direct status commands. */
+  mainAccount?: string;
 }
 
 /**
@@ -92,7 +94,10 @@ registerMessager('wechat', (options, context) => {
   }
   return new WechatMessagerAdapter(token, {
     baseUrl: options.baseUrl as string | undefined,
-    chatIds: options.chatIds as string[] | undefined,
+    chatIds: options.chatIds === undefined ? undefined : [...new Set([
+      ...(options.chatIds as string[]),
+      ...(context.mainAccount === undefined ? [] : [context.mainAccount])
+    ])],
     pollIntervalMs: options.pollIntervalMs as number | undefined,
     timeoutMs: options.timeoutMs as number | undefined,
     bundleGapMs: options.bundleGapMs as number | undefined

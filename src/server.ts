@@ -3,13 +3,14 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { ChatServerOptions } from './config';
 import { evaluateFilters, FilterAdapter, FilterOutcome } from './filters/interface';
 import { createFilter } from './filters/registry';
-import { ConversationMessage, IncomingMessage, MessagerAdapter } from './messagers/interface';
+import { ConversationMessage, IncomingMessage, MessagerAdapter, OutgoingMessage } from './messagers/interface';
 import { createMessager } from './messagers/registry';
 import { Replier } from './repliers/interface';
 import { ModelReplier } from './repliers/model';
 import { ModelRegistry } from './models/runtime';
 import { createTools } from './tools/registry';
-import { ConversationMemoryStore } from './conversations/memory-store';
+import { ConversationMemoryStore, MEMORY_RETENTION_MS, MEMORY_TOKEN_LIMIT } from './conversations/memory-store';
+import { limitReplyText } from './repliers/limits';
 
 export * from './filters/interface';
 export * from './filters/ignore-file';
@@ -30,6 +31,7 @@ export * from './conversations/interface';
  */
 interface ResolvedChat {
   name: string;
+  mainAccount?: string;
   messager: MessagerAdapter;
   filters: readonly FilterAdapter[];
   replier: Replier;
@@ -43,6 +45,8 @@ interface ConversationState {
   messages: { revision: number; message: ConversationMessage }[];
   revision: number;
   processing: boolean;
+  hasPendingMessages: boolean;
+  statusRequest?: IncomingMessage;
 }
 
 /** Owns chat pipelines, message handling, and adapter startup/shutdown. */
@@ -57,6 +61,10 @@ export class ChatServer {
   private startTask?: Promise<void>;
   private closeTask?: Promise<void>;
   private closed = false;
+  private startedAt = 0;
+  private deliveries = 0;
+  private deliveryFailures = 0;
+  private lastDeliveryAt?: string;
 
   /** Binds pipeline configuration to the directory selected at invocation. */
   public constructor(
@@ -89,10 +97,12 @@ export class ChatServer {
       const name = `chat-${index + 1}`;
       return {
         name,
+        mainAccount: definition.messager.mainAccount,
         replier: new ModelReplier(models.get(definition.messager.replyer), createTools(definition.messager.tools)),
         messager: createMessager(definition.messager.name, definition.messager.options ?? {}, {
           chatName: name,
-          configDir: this.configDir
+          configDir: this.configDir,
+          mainAccount: definition.messager.mainAccount
         }),
         filters: definition.filters.map((spec) =>
           createFilter(spec.type, spec.options ?? {}, {
@@ -109,6 +119,7 @@ export class ChatServer {
 
   private async startChats(): Promise<void> {
     try {
+      this.startedAt = Date.now();
       await this.memory.start();
       const references = this.options.chats.flatMap((chat) => [
         chat.messager.replyer,
@@ -164,6 +175,15 @@ export class ChatServer {
     if (this.closed) {
       return;
     }
+    const sources = message.messages?.length ? message.messages : [message];
+    const statusRequest = sources.find((source) => source.text.trim() === '/status' &&
+      chat.mainAccount !== undefined && source.senderId === chat.mainAccount &&
+      message.channel === chat.mainAccount);
+    // Reserved commands cannot be interpreted by the LLM or disclose status in groups.
+    const regularMessages = sources.filter((source) => source.text.trim() !== '/status');
+    if (statusRequest === undefined && regularMessages.length === 0) {
+      return;
+    }
     const key = JSON.stringify([
       chat.name,
       message.metadata?.wechatAccount ?? null,
@@ -176,12 +196,22 @@ export class ChatServer {
         message.metadata?.wechatAccount ?? chat.name,
         message.channel ?? message.senderId
       ]);
-      conversation = { chat, memoryKey, latest: message, messages: [], revision: 0, processing: false };
+      conversation = {
+        chat, memoryKey, latest: message, messages: [], revision: 0,
+        processing: false, hasPendingMessages: false
+      };
       this.conversations.set(key, conversation);
     }
     conversation.latest = message;
-    const sources = message.messages?.length ? message.messages : [message];
-    for (const source of sources) {
+    if (statusRequest !== undefined) {
+      conversation.statusRequest = {
+        ...message, ...statusRequest, text: '/status', messages: undefined
+      };
+    }
+    if (regularMessages.length > 0) {
+      conversation.hasPendingMessages = true;
+    }
+    for (const source of regularMessages) {
       conversation.messages.push({
         revision: ++conversation.revision,
         message: {
@@ -237,17 +267,24 @@ export class ChatServer {
       this.pending.delete(key);
       conversation.processing = true;
       const revision = conversation.revision;
-      const messages = conversation.messages.map((entry) => entry.message);
-      const snapshot: IncomingMessage = {
-        ...conversation.latest,
-        text: messages.map((message) =>
-          `${message.timestamp ?? ''} ${message.senderId}: ${message.text}`.trim()).join('\n'),
-        messages
-      };
       try {
-        if (await this.handleMessage(conversation, snapshot)) {
-          // Preserve arrivals during generation/delivery for the next turn.
-          conversation.messages = conversation.messages.filter((entry) => entry.revision > revision);
+        if (conversation.statusRequest !== undefined) {
+          const request = conversation.statusRequest;
+          conversation.statusRequest = undefined;
+          await this.handleStatus(conversation.chat, request);
+        } else {
+          conversation.hasPendingMessages = false;
+          const messages = conversation.messages.map((entry) => entry.message);
+          const snapshot: IncomingMessage = {
+            ...conversation.latest,
+            text: messages.map((message) =>
+              `${message.timestamp ?? ''} ${message.senderId}: ${message.text}`.trim()).join('\n'),
+            messages
+          };
+          if (await this.handleMessage(conversation, snapshot)) {
+            // Preserve arrivals during generation/delivery for the next turn.
+            conversation.messages = conversation.messages.filter((entry) => entry.revision > revision);
+          }
         }
       } catch (error) {
         if (!this.closed) {
@@ -255,9 +292,9 @@ export class ChatServer {
         }
       } finally {
         conversation.processing = false;
-        if (conversation.messages.length === 0) {
+        if (conversation.messages.length === 0 && conversation.statusRequest === undefined) {
           this.conversations.delete(key);
-        } else if (!this.closed && conversation.revision > revision) {
+        } else if (!this.closed && (conversation.hasPendingMessages || conversation.statusRequest !== undefined)) {
           // Only new arrivals schedule another turn; silence/failures do not spin.
           this.pending.set(key, conversation);
         }
@@ -310,10 +347,7 @@ export class ChatServer {
     if (this.closed || reply === undefined) {
       return false;
     }
-    // Only delivery attempts consume the slot; declined snapshots share it.
-    this.replySlotReady = false;
-    try {
-      await chat.messager.reply(message, reply, this.shutdown.signal);
+    if (await this.deliverReply(chat, message, reply)) {
       // A persistence failure must not turn confirmed delivery into a retry.
       try {
         await this.memory.recordReply(memoryKey, reply);
@@ -321,7 +355,51 @@ export class ChatServer {
         console.error(`[chat:${chat.name}] failed to record delivered reply:`, error);
       }
       return true;
+    }
+    return false;
+  }
+
+  /** Uses only local observations and always replies directly to the controller. */
+  private async handleStatus(chat: ResolvedChat, message: IncomingMessage): Promise<void> {
+    if (chat.mainAccount === undefined || message.senderId !== chat.mainAccount ||
+      message.channel !== chat.mainAccount || this.closed) {
+      return;
+    }
+    const health = chat.messager.getStatus?.();
+    const minutes = Math.floor((Date.now() - this.startedAt) / 60000);
+    const queued = [...this.conversations.values()].filter((item) => item.hasPendingMessages);
+    const buffered = queued.reduce((total, item) => total + item.messages.length, 0);
+    const text = [
+      'ChatServer: running',
+      `Uptime: ${Math.floor(minutes / 60)}h ${minutes % 60}m`,
+      `Pipelines: ${this.started.length}/${this.options.chats.length}`,
+      `Pending conversations: ${queued.length} (${buffered} messages)`,
+      `Pending status queries: ${[...this.conversations.values()].filter((item) => item.statusRequest !== undefined).length}`,
+      `Deliveries: ${this.deliveries}; failures: ${this.deliveryFailures}`,
+      `Last delivery: ${this.lastDeliveryAt ?? 'none'}`,
+      `Adapter: ${chat.messager.name}${health === undefined ? '' : health.active ? ' (active)' : ' (stopped)'}`,
+      `Last successful poll: ${health?.lastSuccessfulPollAt ?? 'none reported'}`,
+      `Consecutive poll failures: ${health?.consecutivePollFailures ?? 'not reported'}`,
+      'Reply delay: random 2–5 minutes',
+      `Memory: ${MEMORY_RETENTION_MS / (24 * 60 * 60 * 1000)} days, up to ${MEMORY_TOKEN_LIMIT} tokens per conversation`
+    ].join('\n');
+    await this.deliverReply(chat, message, { text: limitReplyText(text), direct: true });
+  }
+
+  /** Normal replies and status reports share one paced delivery path. */
+  private async deliverReply(chat: ResolvedChat, message: IncomingMessage, reply: OutgoingMessage): Promise<boolean> {
+    if (this.closed) {
+      return false;
+    }
+    // Only delivery attempts consume the slot; declined snapshots share it.
+    this.replySlotReady = false;
+    try {
+      await chat.messager.reply(message, reply, this.shutdown.signal);
+      this.deliveries += 1;
+      this.lastDeliveryAt = new Date().toISOString();
+      return true;
     } catch (error) {
+      this.deliveryFailures += 1;
       console.error(
         `[chat:${chat.name}] failed to send reply via "${chat.messager.name}": ` +
           `${(error as Error).message}`

@@ -11,6 +11,8 @@ export interface MessagerSpec {
   name: string;
   /** Reply model reference in <provider>/<model id> format. */
   replyer: string;
+  /** Sender ID authorized to query server status in a direct chat. */
+  mainAccount?: string;
   /** Replier tool names; omitted enables the four built-in tools, [] disables them. */
   tools?: readonly string[];
   /** Options passed to the messager factory. */
@@ -179,11 +181,16 @@ function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
   if (!isPlainObject(value)) {
     throw new ConfigError(`${where} must be an object with "name", "replyer", and optional "options".`);
   }
-  warnUnknownKeys(value, ['name', 'replyer', 'tools', 'options'], where);
+  warnUnknownKeys(value, ['name', 'replyer', 'mainAccount', 'tools', 'options'], where);
   if (typeof value.name !== 'string' || !value.name.trim()) {
     throw new ConfigError(`${where}: "name" must be a non-empty registered messager name.`);
   }
   const name = value.name.trim();
+  if (value.mainAccount !== undefined &&
+    (typeof value.mainAccount !== 'string' || !value.mainAccount.trim())) {
+    throw new ConfigError(`${where}.mainAccount must be a non-empty sender ID.`);
+  }
+  const mainAccount = (value.mainAccount as string | undefined)?.trim();
   if (!hasMessager(name)) {
     throw new ConfigError(
       `${where}: unknown messager "${name}". Available: ${listMessagers().join(', ')}.`
@@ -200,7 +207,7 @@ function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
     }
     tools = [...new Set(value.tools as string[])];
   }
-  return { name, replyer: modelReference(value.replyer, `${where}.replyer`), options, tools };
+  return { name, replyer: modelReference(value.replyer, `${where}.replyer`), mainAccount, options, tools };
 }
 
 /** Parses a filter specification and validates its registered name. */
