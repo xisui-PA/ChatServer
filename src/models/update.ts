@@ -1,6 +1,6 @@
 import { createCredentialStore } from './credentials';
 import { CliError, hasFlag, optionalValue, requireValue, resolveConfigDir } from './cli-support';
-import { parseCommandOptions, requireModel, requireProvider } from './command-support';
+import { modelTimeoutOption, parseCommandOptions, requireModel, requireProvider } from './command-support';
 import { findModel, saveModels } from './model-store';
 
 /**
@@ -13,6 +13,7 @@ Updates a provider or one of its models. Only the options you pass are changed.
 Options:
   --provider <name>      Provider name (required)
   --base-url <url>       New OpenAI-compatible base URL for the provider
+  --timeout <ms>         New model timeout for all models from the provider
   --api-key <key>        Replace the provider's stored API key
   --name <name>          Model name to update
   --model <id>           New model identifier for --name
@@ -29,6 +30,7 @@ export async function runUpdate(argv: string[]): Promise<void> {
     valueFlags: {
       '--provider': 'provider',
       '--base-url': 'baseUrl',
+      '--timeout': 'timeout',
       '--api-key': 'apiKey',
       '--name': 'name',
       '--model': 'model',
@@ -47,6 +49,8 @@ export async function runUpdate(argv: string[]): Promise<void> {
   const { file, provider } = await requireProvider(configDir, providerName);
 
   const newBaseUrl = optionalValue(cli, 'baseUrl');
+  const timeoutValue = optionalValue(cli, 'timeout');
+  const timeoutMs = timeoutValue === undefined ? undefined : modelTimeoutOption(timeoutValue);
   const apiKey = optionalValue(cli, 'apiKey');
   const modelName = optionalValue(cli, 'name');
   const newModelId = optionalValue(cli, 'model');
@@ -54,10 +58,10 @@ export async function runUpdate(argv: string[]): Promise<void> {
 
   const hasModelChanges = modelName !== undefined ||
     newModelId !== undefined || newName !== undefined;
-  const hasChanges = newBaseUrl !== undefined || apiKey !== undefined || hasModelChanges;
+  const hasChanges = newBaseUrl !== undefined || timeoutMs !== undefined || apiKey !== undefined || hasModelChanges;
   if (!hasChanges) {
     throw new CliError(
-      'Nothing to update. Pass --base-url, --api-key, or --name with --model/--new-name.'
+      'Nothing to update. Pass --base-url, --timeout, --api-key, or --name with --model/--new-name.'
     );
   }
 
@@ -66,6 +70,9 @@ export async function runUpdate(argv: string[]): Promise<void> {
       throw new CliError('--base-url must not be empty.');
     }
     provider.baseUrl = newBaseUrl;
+  }
+  if (timeoutMs !== undefined) {
+    provider.timeoutMs = timeoutMs;
   }
 
   if (apiKey !== undefined) {

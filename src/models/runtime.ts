@@ -1,7 +1,7 @@
 import { getModelApiKey } from './credentials';
 import { findProvider, loadModels } from './model-store';
 import { parseModelReference } from './reference';
-import { createResponse, ResponseItem, ResponseRequest } from './responses-client';
+import { createResponse, ResponseItem, ResponseRequest, resolveModelTimeoutMs } from './responses-client';
 import { Tool } from '../tools/interface';
 import { ToolRunner } from '../tools/runner';
 
@@ -26,7 +26,8 @@ class ProviderModel implements TextModel {
   public constructor(
     private readonly baseUrl: string,
     private readonly modelId: string,
-    private readonly apiKey: string
+    private readonly apiKey: string,
+    private readonly timeoutMs: number
   ) {}
 
   public async generate(
@@ -44,6 +45,7 @@ class ProviderModel implements TextModel {
         input,
         instructions,
         reasoningEffort: options.reasoningEffort,
+        timeoutMs: this.timeoutMs,
         signal
       });
       return result.outputText;
@@ -54,9 +56,14 @@ class ProviderModel implements TextModel {
     if (signal?.aborted) {
       controller.abort();
     }
-    const timer = setTimeout(cancel, 120_000);
+    const timer = setTimeout(cancel, this.timeoutMs);
     try {
       return await this.generateWithTools(input, instructions, tools, controller.signal, options.reasoningEffort);
+    } catch (error) {
+      if (controller.signal.aborted && !signal?.aborted) {
+        throw new Error(`Model "${this.modelId}" timed out after ${this.timeoutMs} ms.`);
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);
@@ -87,6 +94,7 @@ class ProviderModel implements TextModel {
         input: history,
         instructions,
         reasoningEffort,
+        timeoutMs: this.timeoutMs,
         signal,
         tools: tools.map((tool) => tool.definition),
         toolChoice: usedCalls >= maxCalls ? 'none' : 'auto'
@@ -129,7 +137,10 @@ class ProviderModel implements TextModel {
 export class ModelRegistry {
   private readonly models = new Map<string, TextModel>();
 
-  public static async load(configDir: string, references: readonly string[]): Promise<ModelRegistry> {
+  public static async load(
+    configDir: string,
+    references: readonly string[]
+  ): Promise<ModelRegistry> {
     const registry = new ModelRegistry();
     if (references.length === 0) {
       return registry;
@@ -150,7 +161,9 @@ export class ModelRegistry {
         apiKey = await getModelApiKey(provider.provider);
         keys.set(provider.provider, apiKey);
       }
-      registry.models.set(reference, new ProviderModel(provider.baseUrl, modelId, apiKey));
+      registry.models.set(reference, new ProviderModel(
+        provider.baseUrl, modelId, apiKey, resolveModelTimeoutMs(provider.timeoutMs)
+      ));
     }
     return registry;
   }

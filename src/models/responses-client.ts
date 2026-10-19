@@ -1,5 +1,15 @@
 import { ToolDefinition } from '../tools/interface';
 
+export const DEFAULT_MODEL_TIMEOUT_MS = 180_000;
+
+/** Validates durations against Node's timer range, including programmatic callers. */
+export function resolveModelTimeoutMs(value: unknown = DEFAULT_MODEL_TIMEOUT_MS): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) {
+    throw new Error('Model timeout must be an integer from 1 to 2147483647 milliseconds.');
+  }
+  return value;
+}
+
 /** A Responses API input/output item, preserved across tool round trips. */
 export type ResponseItem = Record<string, unknown>;
 
@@ -25,7 +35,7 @@ export interface ResponseRequest {
   reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Extra request headers. */
   headers?: Record<string, string>;
-  /** Request timeout in milliseconds. Defaults to 60 seconds. */
+  /** Request timeout in milliseconds. Defaults to 3 minutes. */
   timeoutMs?: number;
   /** Optional caller cancellation, in addition to the request timeout. */
   signal?: AbortSignal;
@@ -111,7 +121,7 @@ export function extractOutputText(payload: unknown): string {
  */
 export async function createResponse(request: ResponseRequest): Promise<ResponseResult> {
   const url = responsesEndpoint(request.baseUrl);
-  const timeoutMs = request.timeoutMs ?? 60_000;
+  const timeoutMs = resolveModelTimeoutMs(request.timeoutMs);
   const controller = new AbortController();
   const cancel = () => controller.abort();
   request.signal?.addEventListener('abort', cancel, { once: true });

@@ -1,6 +1,6 @@
 import { createCredentialStore } from './credentials';
 import { CliError, hasFlag, optionalValue, promptLine, requireValue, resolveConfigDir } from './cli-support';
-import { newApiKey, parseCommandOptions } from './command-support';
+import { DEFAULT_TIMEOUT_MS, modelTimeoutOption, newApiKey, parseCommandOptions } from './command-support';
 import {
   DEFAULT_BASE_URL,
   ensureProvider,
@@ -26,6 +26,7 @@ Options:
   --base-url <url>       OpenAI-compatible base URL
                          (default: ${DEFAULT_BASE_URL} for new providers)
   --api-key <key>        API key to store for the provider
+  --timeout <ms>         Provider model timeout (default: ${DEFAULT_TIMEOUT_MS} for new providers)
   --config_dir <dir>     Config folder
   --force                Overwrite an existing model without asking
   -h, --help             Show this help
@@ -45,7 +46,8 @@ export async function runAdd(argv: string[]): Promise<void> {
       '--name': 'name',
       '--model': 'model',
       '--base-url': 'baseUrl',
-      '--api-key': 'apiKey'
+      '--api-key': 'apiKey',
+      '--timeout': 'timeout'
     },
     booleanFlags: { '--force': 'force' }
   });
@@ -60,6 +62,8 @@ export async function runAdd(argv: string[]): Promise<void> {
   const modelId = requireValue(cli, 'model', '--model');
   const name = optionalValue(cli, 'name') ?? modelId;
   const baseUrl = optionalValue(cli, 'baseUrl');
+  const timeoutValue = optionalValue(cli, 'timeout');
+  const timeoutMs = timeoutValue === undefined ? undefined : modelTimeoutOption(timeoutValue);
   const file = await loadModels(configDir);
 
   const existingProvider = findProvider(file, providerName);
@@ -68,6 +72,9 @@ export async function runAdd(argv: string[]): Promise<void> {
 
   if (existingProvider !== undefined && baseUrl !== undefined && baseUrl !== '') {
     provider.baseUrl = baseUrl;
+  }
+  if (timeoutMs !== undefined) {
+    provider.timeoutMs = timeoutMs;
   }
 
   if (findModel(provider, name) !== undefined && !hasFlag(cli, 'force')) {

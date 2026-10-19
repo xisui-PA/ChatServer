@@ -8,6 +8,7 @@ import {
   promptHidden
 } from './cli-support';
 import { findModel, findProvider, getModelsPath, loadModels, ModelEntry, ModelsFile, ProviderConfig } from './model-store';
+import { DEFAULT_MODEL_TIMEOUT_MS, resolveModelTimeoutMs } from './responses-client';
 
 /**
  * Default prompt used by `test` when --prompt is not supplied.
@@ -17,7 +18,7 @@ export const DEFAULT_PROMPT = 'Say hello in one short sentence.';
 /**
  * Default request timeout in milliseconds.
  */
-export const DEFAULT_TIMEOUT_MS = 60_000;
+export const DEFAULT_TIMEOUT_MS = DEFAULT_MODEL_TIMEOUT_MS;
 
 const COMMON_VALUE_FLAGS: Record<string, string> = {
   '--config_dir': 'configDir',
@@ -73,22 +74,17 @@ export function requireModel(provider: ProviderConfig, name: string): ModelEntry
 }
 
 /**
- * Reads a positive integer option.
+ * Reads the CLI timeout using the same validation as models.json and HTTP calls.
  */
-export function positiveInteger(
+export function modelTimeoutOption(
   value: string | undefined,
-  label: string,
-  fallback: number
+  fallback: number = DEFAULT_TIMEOUT_MS
 ): number {
-  if (value === undefined) {
-    return fallback;
+  try {
+    return resolveModelTimeoutMs(value === undefined ? fallback : Number(value));
+  } catch (error) {
+    throw new CliError(`--timeout: ${(error as Error).message}`);
   }
-
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new CliError(`${label} must be a positive integer.`);
-  }
-  return parsed;
 }
 
 /**

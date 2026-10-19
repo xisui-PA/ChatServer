@@ -1,5 +1,5 @@
 import { hasFlag, optionalValue, resolveConfigDir } from './cli-support';
-import { parseCommandOptions } from './command-support';
+import { DEFAULT_TIMEOUT_MS, parseCommandOptions } from './command-support';
 import { getModelsPath, loadModels } from './model-store';
 
 /**
@@ -8,6 +8,7 @@ import { getModelsPath, loadModels } from './model-store';
 const PROVIDER_COLUMN_WIDTH = 16;
 const NAME_COLUMN_WIDTH = 20;
 const MODEL_ID_COLUMN_WIDTH = 24;
+const TIMEOUT_COLUMN_WIDTH = 14;
 
 /**
  * Help text for `chatserver-models list`.
@@ -50,7 +51,7 @@ export async function runList(argv: string[]): Promise<void> {
   console.log('');
   console.log(
     `${'PROVIDER'.padEnd(PROVIDER_COLUMN_WIDTH)}${'MODEL'.padEnd(NAME_COLUMN_WIDTH)}` +
-      `${'MODEL ID'.padEnd(MODEL_ID_COLUMN_WIDTH)}BASE URL`
+      `${'MODEL ID'.padEnd(MODEL_ID_COLUMN_WIDTH)}${'TIMEOUT (MS)'.padEnd(TIMEOUT_COLUMN_WIDTH)}BASE URL`
   );
 
   let modelCount = 0;
@@ -58,7 +59,8 @@ export async function runList(argv: string[]): Promise<void> {
     if (provider.models.length === 0) {
       console.log(
         `${provider.provider.padEnd(PROVIDER_COLUMN_WIDTH)}${'(no models)'.padEnd(NAME_COLUMN_WIDTH)}` +
-          `${''.padEnd(MODEL_ID_COLUMN_WIDTH)}${provider.baseUrl}`
+          `${''.padEnd(MODEL_ID_COLUMN_WIDTH)}` +
+          `${String(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS).padEnd(TIMEOUT_COLUMN_WIDTH)}${provider.baseUrl}`
       );
       continue;
     }
@@ -68,7 +70,8 @@ export async function runList(argv: string[]): Promise<void> {
       console.log(
         `${provider.provider.padEnd(PROVIDER_COLUMN_WIDTH)}` +
           `${model.name.padEnd(NAME_COLUMN_WIDTH)}` +
-          `${model.id.padEnd(MODEL_ID_COLUMN_WIDTH)}${provider.baseUrl}`
+          `${model.id.padEnd(MODEL_ID_COLUMN_WIDTH)}` +
+          `${String(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS).padEnd(TIMEOUT_COLUMN_WIDTH)}${provider.baseUrl}`
       );
     }
   }

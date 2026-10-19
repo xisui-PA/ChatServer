@@ -1,5 +1,6 @@
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_MODEL_TIMEOUT_MS, resolveModelTimeoutMs } from './responses-client';
 
 /**
  * Default base URL for the OpenAI-compatible Responses API.
@@ -32,6 +33,8 @@ export interface ProviderConfig {
   provider: string;
   /** Base URL of the OpenAI-compatible API, without a trailing `/responses`. */
   baseUrl: string;
+  /** Timeout for this provider's model requests and tool cycles; defaults to 180000 ms. */
+  timeoutMs?: number;
   /** Models available from this provider. */
   models: ModelEntry[];
 }
@@ -118,10 +121,18 @@ function parseProvider(value: unknown, index: number, modelsPath: string): Provi
     throw new ModelStoreError(`${where}: "models" must be an array.`);
   }
 
+  let timeoutMs: number;
+  try {
+    timeoutMs = resolveModelTimeoutMs(value.timeoutMs);
+  } catch (error) {
+    throw new ModelStoreError(`${where}: "timeoutMs": ${(error as Error).message}`);
+  }
+
   const seen = new Set<string>();
   return {
     provider: value.provider.trim(),
     baseUrl: baseUrl.trim(),
+    timeoutMs,
     models: value.models.map((model, modelIndex) =>
       parseModelEntry(model, `${where}.models[${modelIndex}]`, seen)
     )
@@ -209,7 +220,7 @@ export function ensureProvider(
     return existing;
   }
 
-  const created: ProviderConfig = { provider, baseUrl, models: [] };
+  const created: ProviderConfig = { provider, baseUrl, timeoutMs: DEFAULT_MODEL_TIMEOUT_MS, models: [] };
   file.providers.push(created);
   return created;
 }

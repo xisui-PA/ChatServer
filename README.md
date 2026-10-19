@@ -585,8 +585,11 @@ reply text, not the JSON envelope, memory notes, tool results, or internal reaso
 Requests include the current conversation snapshot, sender IDs, channel, and
 retained conversation memory, plus supported images as separate image parts.
 Other attachment types are not sent to the model.
-Individual model requests have a 60-second timeout; replies using tools have a
-120-second overall deadline. Requests are cancelled during server shutdown. Failed
+Individual model requests use their provider's `timeoutMs` from `models.json`,
+defaulting to three minutes when omitted.
+For repliers using tools, the same setting also caps the entire generation,
+including all model/tool rounds. The clock starts when model generation begins,
+after the reply delay and image retrieval. Requests are cancelled during server shutdown. Failed
 model requests and sends are not retried automatically.
 
 ### Conversation memory
@@ -742,8 +745,9 @@ npm run model:add -- \
   --name gpt-mini
 ```
 
-The provider is created when it does not exist yet. An existing provider's base URL and
-API key are kept unless you pass `--base-url` or `--api-key`. When the provider has no
+The provider is created when it does not exist yet. An existing provider's base URL,
+timeout, and API key are kept unless you pass `--base-url`, `--timeout`, or `--api-key`.
+When the provider has no
 stored key, the key is read from `--api-key`, then `OPENAI_API_KEY`, then an interactive
 prompt (input is hidden). Existing models are only replaced with `--force` or by
 confirming the prompt.
@@ -757,6 +761,7 @@ confirming the prompt.
     {
       "provider": "openai",
       "baseUrl": "https://api.openai.com/v1",
+      "timeoutMs": 180000,
       "models": [
         { "id": "gpt-4.1-mini", "name": "gpt-mini" }
       ]
@@ -765,14 +770,26 @@ confirming the prompt.
 }
 ```
 
+Each provider's optional `timeoutMs` applies to all its models, including model
+filters and repliers. It defaults to **180000 ms (3 minutes)** when omitted.
+Use a positive integer in milliseconds up to `2147483647`; for example, `300000`
+allows five minutes. Different providers can use different values. This setting
+is independent of the WeChat transport's `options.timeoutMs`.
+
+Use `--timeout <ms>` with `add` or `update` to save the provider setting. Move any
+previous top-level `modelTimeoutMs` from `config.json` to the desired provider
+entries as `timeoutMs`; the server no longer reads model timeouts from `config.json`.
+
 ### Test a model
 
 ```bash
 npm run model:test -- --provider openai --name gpt-mini --prompt "Say hello."
 ```
 
-Add `--json` to print the raw API response, or `--timeout <ms>` to change the 60-second
-request timeout. The key comes from `CHATSERVER_MODEL_API_KEY` or the credential manager.
+Add `--json` to print the raw API response, or `--timeout <ms>` to override the
+provider's configured timeout for this request without changing `models.json`.
+Without the flag, the provider setting applies, defaulting to three minutes.
+The key comes from `CHATSERVER_MODEL_API_KEY` or the credential manager.
 
 ### List, update, and remove
 
@@ -780,6 +797,7 @@ request timeout. The key comes from `CHATSERVER_MODEL_API_KEY` or the credential
 npm run model:list --
 
 npm run model:update -- --provider openai --base-url https://api.openai.com/v1
+npm run model:update -- --provider openai --timeout 300000           # five minutes
 npm run model:update -- --provider openai --api-key sk-...          # rotate the key
 npm run model:update -- --provider openai --name gpt-mini --model gpt-4.1
 npm run model:update -- --provider openai --name gpt-mini --new-name mini
@@ -790,7 +808,7 @@ npm run model:remove -- --provider openai --name gpt-mini
 When `remove` deletes a provider's last model, the provider entry is removed too and its
 API key is deleted from the credential manager.
 
-`list` prints a table with provider, model name, model id, and base URL; add `--json` for
+`list` prints a table with provider, model name, model id, timeout, and base URL; add `--json` for
 raw JSON. `update` only changes the options you pass and fails when none are given.
 
 When installed as a CLI the binary is `chatserver-models`, for example

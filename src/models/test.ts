@@ -4,7 +4,7 @@ import {
   DEFAULT_TIMEOUT_MS,
   existingApiKey,
   parseCommandOptions,
-  positiveInteger,
+  modelTimeoutOption,
   requireModel,
   requireProvider
 } from './command-support';
@@ -21,7 +21,7 @@ Options:
   --provider <name>    Provider name from models.json (required)
   --name <name>        Model name from models.json (required)
   --prompt <text>      Prompt to send (default: "${DEFAULT_PROMPT}")
-  --timeout <ms>       Request timeout in milliseconds (default: ${DEFAULT_TIMEOUT_MS})
+  --timeout <ms>       Override provider timeout for this request (default: provider setting or ${DEFAULT_TIMEOUT_MS})
   --json               Print the raw API response instead of just the text
   --config_dir <dir>   Config folder
   -h, --help           Show this help
@@ -56,7 +56,7 @@ export async function runTest(argv: string[]): Promise<void> {
   const model = requireModel(provider, name);
   const apiKey = await existingApiKey(provider);
   const prompt = optionalValue(cli, 'prompt') ?? DEFAULT_PROMPT;
-  const timeoutMs = positiveInteger(optionalValue(cli, 'timeout'), '--timeout', DEFAULT_TIMEOUT_MS);
+  const timeoutMs = modelTimeoutOption(optionalValue(cli, 'timeout'), provider.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
   console.log(`Testing ${name} (${model.id}) via ${provider.provider} at ${provider.baseUrl}...`);
 
