@@ -11,6 +11,8 @@ import { ModelRegistry } from './models/runtime';
 import { createTools } from './tools/registry';
 import { ConversationMemoryStore, MEMORY_RETENTION_MS, MEMORY_TOKEN_LIMIT } from './conversations/memory-store';
 import { limitReplyText } from './repliers/limits';
+import { PendingImagesError } from './models/conversation-input';
+import { ResponsesApiError } from './models/responses-client';
 
 export * from './filters/interface';
 export * from './filters/ignore-file';
@@ -47,11 +49,18 @@ interface ConversationState {
   processing: boolean;
   hasPendingMessages: boolean;
   statusRequest?: IncomingMessage;
+  selfRevision: number;
+  retryAttempts: number;
+  retryTimer?: ReturnType<typeof setTimeout>;
 }
+
+/** A manual/self reply arrived after the snapshot was taken. */
+class SupersededTurnError extends Error {}
 
 /** Owns chat pipelines, message handling, and adapter startup/shutdown. */
 export class ChatServer {
   private processing?: Promise<void>;
+  private ingestion: Promise<void> = Promise.resolve();
   private readonly conversations = new Map<string, ConversationState>();
   private readonly pending = new Map<string, ConversationState>();
   private readonly memory: ConversationMemoryStore;
@@ -64,6 +73,10 @@ export class ChatServer {
   private startedAt = 0;
   private deliveries = 0;
   private deliveryFailures = 0;
+  private processingFailures = 0;
+  private filterFailures = 0;
+  private lastProcessingError?: string;
+  private lastProcessingErrorAt?: string;
   private lastDeliveryAt?: string;
 
   /** Binds pipeline configuration to the directory selected at invocation. */
@@ -87,6 +100,9 @@ export class ChatServer {
   public close(): Promise<void> {
     this.closed = true;
     this.shutdown.abort();
+    for (const conversation of this.conversations.values()) {
+      clearTimeout(conversation.retryTimer);
+    }
     this.closeTask ??= this.closeChats();
     return this.closeTask;
   }
@@ -136,12 +152,16 @@ export class ChatServer {
         }
         this.started.push(chat);
         await chat.messager.start((message) => {
-          this.enqueueMessage(chat, message);
+          // Keep asynchronous source selection in transport order, before the 30-row cap.
+          this.ingestion = this.ingestion.then(() => this.receiveMessage(chat, message)).catch((error: unknown) => {
+            console.error(`[chat:${chat.name}] failed to receive message:`, error);
+          });
         });
       }
     } catch (error) {
       this.closed = true;
       this.shutdown.abort();
+      await this.ingestion;
       await this.processing;
       await this.stopChats().catch((cleanupError: unknown) => {
         console.error('[chat] failed to clean up after startup:', cleanupError);
@@ -153,11 +173,15 @@ export class ChatServer {
   private async closeChats(): Promise<void> {
     // Startup already reports its error and cleans up partially started adapters.
     await this.startTask?.catch(() => {});
+    await this.ingestion;
     await this.processing;
     await this.stopChats();
   }
 
   private async stopChats(): Promise<void> {
+    for (const conversation of this.conversations.values()) {
+      clearTimeout(conversation.retryTimer);
+    }
     this.pending.clear();
     this.conversations.clear();
     const stopping = this.started.splice(0);
@@ -170,13 +194,38 @@ export class ChatServer {
     }
   }
 
+  /** Discard ignored traffic before it can evict useful messages from the buffer. */
+  private async receiveMessage(chat: ResolvedChat, message: IncomingMessage): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    const sources = message.messages?.length ? message.messages : [message];
+    let selected = sources.filter((source) => source.text.trim() !== '/status');
+    try {
+      for (const filter of chat.filters) {
+        if (filter.selectMessages !== undefined) {
+          selected = [...await filter.selectMessages(selected)];
+        }
+      }
+    } catch {
+      // Let the normal worker fail closed, report the error, and decide about retries.
+      this.enqueueMessage(chat, message);
+      return;
+    }
+    const retained = new Set(selected);
+    const messages = sources.filter((source) => source.text.trim() === '/status' || retained.has(source));
+    if (messages.length > 0) {
+      this.enqueueMessage(chat, { ...message, messages });
+    }
+  }
+
   /** Updates bounded context without adding duplicate conversation entries. */
   private enqueueMessage(chat: ResolvedChat, message: IncomingMessage): void {
     if (this.closed) {
       return;
     }
     const sources = message.messages?.length ? message.messages : [message];
-    const statusRequest = sources.find((source) => source.text.trim() === '/status' &&
+    const statusRequest = sources.find((source) => !source.isSelf && source.text.trim() === '/status' &&
       chat.mainAccount !== undefined && source.senderId === chat.mainAccount &&
       message.channel === chat.mainAccount);
     // Reserved commands cannot be interpreted by the LLM or disclose status in groups.
@@ -198,7 +247,7 @@ export class ChatServer {
       ]);
       conversation = {
         chat, memoryKey, latest: message, messages: [], revision: 0,
-        processing: false, hasPendingMessages: false
+        processing: false, hasPendingMessages: false, selfRevision: 0, retryAttempts: 0
       };
       this.conversations.set(key, conversation);
     }
@@ -208,8 +257,11 @@ export class ChatServer {
         ...message, ...statusRequest, text: '/status', messages: undefined
       };
     }
-    if (regularMessages.length > 0) {
+    if (regularMessages.some((source) => !source.isSelf)) {
       conversation.hasPendingMessages = true;
+      conversation.retryAttempts = 0;
+      clearTimeout(conversation.retryTimer);
+      conversation.retryTimer = undefined;
     }
     for (const source of regularMessages) {
       conversation.messages.push({
@@ -218,19 +270,29 @@ export class ChatServer {
           id: source.id ?? `message:${randomUUID()}`,
           text: source.text,
           senderId: source.senderId,
+          isSelf: source.isSelf === true,
           images: source.images,
           timestamp: source.timestamp && Number.isFinite(Date.parse(source.timestamp))
             ? new Date(Math.min(Date.now(), Date.parse(source.timestamp))).toISOString()
             : new Date().toISOString()
         }
       });
+      if (source.isSelf) {
+        conversation.selfRevision = conversation.revision;
+        // Invalidate a response being generated from context preceding a manual reply.
+        if (conversation.processing && conversation.messages.some((entry) => !entry.message.isSelf)) {
+          conversation.hasPendingMessages = true;
+        }
+      }
     }
     conversation.messages = conversation.messages.slice(-30);
-    if (!conversation.processing) {
+    if (!conversation.processing && (conversation.hasPendingMessages || conversation.statusRequest !== undefined)) {
       // Updating an existing Map entry preserves its FIFO position.
       this.pending.set(key, conversation);
     }
-    this.startProcessing();
+    if (this.pending.size > 0) {
+      this.startProcessing();
+    }
   }
 
   /** Runs a single worker; polling can keep updating context while it waits. */
@@ -275,28 +337,64 @@ export class ChatServer {
           await this.handleStatus(conversation.chat, request);
         } else {
           conversation.hasPendingMessages = false;
-          const messages = conversation.messages.map((entry) => entry.message);
+          const selfRevision = conversation.selfRevision;
+          let messages = conversation.messages.map((entry) => entry.message);
+          // Exclusions apply before all decision filters, regardless of their order.
+          for (const filter of conversation.chat.filters) {
+            if (filter.selectMessages !== undefined) {
+              try {
+                messages = [...await filter.selectMessages(messages)];
+              } catch (error) {
+                this.filterFailures += 1;
+                throw error;
+              }
+            }
+          }
+          const retained = new Set(messages);
+          conversation.messages = conversation.messages.filter((entry) => entry.revision > revision || retained.has(entry.message));
+          const latestIncoming = [...messages].reverse().find((source) => !source.isSelf);
+          if (latestIncoming === undefined) {
+            continue;
+          }
           const snapshot: IncomingMessage = {
             ...conversation.latest,
+            ...latestIncoming,
             text: messages.map((message) =>
               `${message.timestamp ?? ''} ${message.senderId}: ${message.text}`.trim()).join('\n'),
             messages
           };
-          if (await this.handleMessage(conversation, snapshot)) {
+          if (await this.handleMessage(conversation, snapshot, selfRevision)) {
             // Preserve arrivals during generation/delivery for the next turn.
             conversation.messages = conversation.messages.filter((entry) => entry.revision > revision);
           }
+          conversation.retryAttempts = 0;
         }
       } catch (error) {
-        if (!this.closed) {
+        if (!this.closed && !(error instanceof SupersededTurnError)) {
+          this.processingFailures += 1;
+          this.lastProcessingError = error instanceof PendingImagesError ? 'image pending' :
+            error instanceof ResponsesApiError ? `model request failed${error.status === undefined ? '' : ` (HTTP ${error.status})`}` :
+              'processing/filter error (see server log)';
+          this.lastProcessingErrorAt = new Date().toISOString();
           console.error(`[chat:${conversation.chat.name}] failed to process conversation:`, error);
+          const retryable = error instanceof PendingImagesError ||
+            (error instanceof ResponsesApiError && (error.status === undefined ||
+              error.status === 408 || error.status === 429 || error.status >= 500));
+          if (retryable && !conversation.hasPendingMessages) {
+            this.scheduleRetry(key, conversation);
+          }
         }
       } finally {
         conversation.processing = false;
+        if (!conversation.messages.some((entry) => !entry.message.isSelf)) {
+          conversation.hasPendingMessages = false;
+          clearTimeout(conversation.retryTimer);
+          conversation.retryTimer = undefined;
+        }
         if (conversation.messages.length === 0 && conversation.statusRequest === undefined) {
           this.conversations.delete(key);
         } else if (!this.closed && (conversation.hasPendingMessages || conversation.statusRequest !== undefined)) {
-          // Only new arrivals schedule another turn; silence/failures do not spin.
+          // New arrivals and bounded pre-delivery retries return at the FIFO tail.
           this.pending.set(key, conversation);
         }
       }
@@ -304,8 +402,27 @@ export class ChatServer {
     this.replySlotReady = false;
   }
 
+  /** Retries preparation only; delivery attempts never enter this path. */
+  private scheduleRetry(key: string, conversation: ConversationState): void {
+    if (conversation.retryAttempts >= 2 || this.closed) {
+      return;
+    }
+    conversation.retryAttempts += 1;
+    const wait = 30_000 * 2 ** (conversation.retryAttempts - 1);
+    conversation.retryTimer = setTimeout(() => {
+      conversation.retryTimer = undefined;
+      if (!this.closed && this.conversations.get(key) === conversation) {
+        conversation.hasPendingMessages = true;
+        if (!conversation.processing) {
+          this.pending.set(key, conversation);
+        }
+        this.startProcessing();
+      }
+    }, wait);
+  }
+
   /** Returns true only after a snapshot's reply is successfully delivered. */
-  private async handleMessage(conversation: ConversationState, message: IncomingMessage): Promise<boolean> {
+  private async handleMessage(conversation: ConversationState, message: IncomingMessage, selfRevision: number): Promise<boolean> {
     const { chat, memoryKey } = conversation;
     if (this.closed) {
       return false;
@@ -324,6 +441,12 @@ export class ChatServer {
     let outcome = FilterOutcome.Optional;
     if (chat.filters.length > 0) {
       const evaluation = await evaluateFilters(chat.filters, message);
+      if ('error' in evaluation) {
+        if (!(evaluation.error instanceof PendingImagesError)) {
+          this.filterFailures += 1;
+        }
+        throw evaluation.error;
+      }
       if (evaluation.outcome === FilterOutcome.Denied) {
         const reason = evaluation.decidedBy ? ` by filter "${evaluation.decidedBy}"` : '';
         console.log(`[chat:${chat.name}] dropped message from ${message.senderId}${reason}`);
@@ -335,7 +458,13 @@ export class ChatServer {
       return false;
     }
 
+    if (conversation.selfRevision !== selfRevision) {
+      throw new SupersededTurnError();
+    }
     const result = await chat.replier.replyTo(message, outcome, this.shutdown.signal);
+    if (conversation.selfRevision !== selfRevision) {
+      throw new SupersededTurnError();
+    }
     if (this.closed) {
       return false;
     }
@@ -345,6 +474,9 @@ export class ChatServer {
       console.error(`[chat:${chat.name}] failed to save conversation notes:`, error);
     }
     const reply = result.reply;
+    if (conversation.selfRevision !== selfRevision) {
+      throw new SupersededTurnError();
+    }
     if (this.closed || reply === undefined) {
       return false;
     }
@@ -370,19 +502,17 @@ export class ChatServer {
     const minutes = Math.floor((Date.now() - this.startedAt) / 60000);
     const queued = [...this.conversations.values()].filter((item) => item.hasPendingMessages);
     const buffered = queued.reduce((total, item) => total + item.messages.length, 0);
+    const age = (value: string | undefined) => value === undefined ? 'none' :
+      `${Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 60_000))}m ago`;
     const text = [
-      'ChatServer: running',
-      `Uptime: ${Math.floor(minutes / 60)}h ${minutes % 60}m`,
-      `Pipelines: ${this.started.length}/${this.options.chats.length}`,
-      `Pending conversations: ${queued.length} (${buffered} messages)`,
-      `Pending status queries: ${[...this.conversations.values()].filter((item) => item.statusRequest !== undefined).length}`,
-      `Deliveries: ${this.deliveries}; failures: ${this.deliveryFailures}`,
-      `Last delivery: ${this.lastDeliveryAt ?? 'none'}`,
-      `Adapter: ${chat.messager.name}${health === undefined ? '' : health.active ? ' (active)' : ' (stopped)'}`,
-      `Last successful poll: ${health?.lastSuccessfulPollAt ?? 'none reported'}`,
-      `Consecutive poll failures: ${health?.consecutivePollFailures ?? 'not reported'}`,
-      'Reply delay: random 2–5 minutes',
-      `Memory: ${MEMORY_RETENTION_MS / (24 * 60 * 60 * 1000)} days, up to ${MEMORY_TOKEN_LIMIT} tokens per conversation`
+      `ChatServer running; uptime ${Math.floor(minutes / 60)}h ${minutes % 60}m; pipelines ${this.started.length}/${this.options.chats.length}`,
+      `Queue: ${queued.length} conversations, ${buffered} messages; status ${[...this.conversations.values()].filter((item) => item.statusRequest !== undefined).length}; retries ${[...this.conversations.values()].filter((item) => item.retryTimer !== undefined).length}`,
+      `Processing errors: ${this.processingFailures} (filters ${this.filterFailures})`,
+      `Last processing error: ${this.lastProcessingError ?? 'none'} (${age(this.lastProcessingErrorAt)})`,
+      `Deliveries: ${this.deliveries}; failures ${this.deliveryFailures}; last ${age(this.lastDeliveryAt)}`,
+      `Adapter: ${chat.messager.name}${health === undefined ? '' : health.active ? ' active' : ' stopped'}; poll failures ${health?.consecutivePollFailures ?? 0}; failed chats ${health?.failedChats ?? 0}`,
+      `Last poll: ${age(health?.lastSuccessfulPollAt)}; last poll error: ${age(health?.lastPollErrorAt)}`,
+      `Delay: 2–5m; memory: ${MEMORY_RETENTION_MS / (24 * 60 * 60 * 1000)} days/${MEMORY_TOKEN_LIMIT} tokens`
     ].join('\n');
     await this.deliverReply(chat, message, { text: limitReplyText(text), direct: true });
   }

@@ -1,10 +1,15 @@
 import { ConversationMemory } from '../conversations/interface';
 
+/** Distinguishes media that may become available from terminal failures. */
+export type ImageLoadResult =
+  | { status: 'ready'; dataUrl: string }
+  | { status: 'pending' | 'unavailable' };
+
 /** Lazily retrieves a base64 image data URL without exposing transport credentials. */
 export interface IncomingImage {
   id: string;
-  /** Undefined means the image is not available from the transport yet. */
-  load(signal?: AbortSignal): Promise<string | undefined>;
+  /** Legacy undefined means unavailable; pending media must be explicitly labeled. */
+  load(signal?: AbortSignal): Promise<string | ImageLoadResult | undefined>;
 }
 
 /** One source message in a conversation, with its original author and time. */
@@ -15,6 +20,8 @@ export interface ConversationMessage {
   text: string;
   /** Adapter-specific identifier for the sender (connection, user, etc.). */
   senderId: string;
+  /** Context from our account; never independently triggers a reply. */
+  isSelf?: boolean;
   /** Original timestamp, when supplied by the adapter. */
   timestamp?: string;
   /** Images belonging to this source message, loaded only for model processing. */
@@ -58,6 +65,9 @@ export interface MessagerStatus {
   active: boolean;
   lastSuccessfulPollAt?: string;
   consecutivePollFailures?: number;
+  failedChats?: number;
+  lastPollError?: string;
+  lastPollErrorAt?: string;
 }
 
 /**

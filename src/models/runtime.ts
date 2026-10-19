@@ -1,9 +1,10 @@
 import { getModelApiKey } from './credentials';
 import { findProvider, loadModels } from './model-store';
 import { parseModelReference } from './reference';
-import { createResponse, ResponseItem, ResponseRequest, resolveModelTimeoutMs } from './responses-client';
+import { createResponse, ResponseItem, ResponseRequest, ResponsesApiError, resolveModelTimeoutMs } from './responses-client';
 import { Tool } from '../tools/interface';
 import { ToolRunner } from '../tools/runner';
+import { assertInputBudget, boundedText, modelInputTokens, MODEL_INPUT_TOKENS, TOOL_RESULT_TOKENS } from './input-budget';
 
 /** Per-request generation settings; never mutate a shared model's defaults. */
 export interface GenerationOptions {
@@ -37,6 +38,7 @@ class ProviderModel implements TextModel {
     options: GenerationOptions = {}
   ): Promise<string> {
     const tools = options.tools ?? [];
+    assertInputBudget(input, instructions, tools.map((tool) => tool.definition));
     if (tools.length === 0) {
       const result = await createResponse({
         baseUrl: this.baseUrl,
@@ -61,7 +63,7 @@ class ProviderModel implements TextModel {
       return await this.generateWithTools(input, instructions, tools, controller.signal, options.reasoningEffort);
     } catch (error) {
       if (controller.signal.aborted && !signal?.aborted) {
-        throw new Error(`Model "${this.modelId}" timed out after ${this.timeoutMs} ms.`);
+        throw new ResponsesApiError(`Model "${this.modelId}" timed out after ${this.timeoutMs} ms.`);
       }
       throw error;
     } finally {
@@ -79,14 +81,28 @@ class ProviderModel implements TextModel {
     reasoningEffort: ResponseRequest['reasoningEffort']
   ): Promise<string> {
     const runner = new ToolRunner(tools);
-    const history: ResponseItem[] = typeof input === 'string'
+    const initial: ResponseItem[] = typeof input === 'string'
       ? [{ role: 'user', content: input }] : [...input];
+    const turns: ResponseItem[][] = [];
+    const definitions = tools.map((tool) => tool.definition);
     const maxCalls = 8;
     let usedCalls = 0;
     const callIds = new Set<string>();
     // At most eight tool-producing rounds, followed by one tool-free final answer.
     for (let round = 0; round <= maxCalls; round += 1) {
       signal.throwIfAborted();
+      let history = [...initial, ...turns.flat()];
+      // Remove entire completed rounds, keeping calls paired with their results.
+      while (turns.length > 1 && modelInputTokens(history, instructions, definitions) > MODEL_INPUT_TOKENS) {
+        turns.shift();
+        history = [...initial, ...turns.flat()];
+      }
+      if (modelInputTokens(history, instructions, definitions) > MODEL_INPUT_TOKENS) {
+        turns.length = 0;
+        history = [...initial, { role: 'user', content: 'Tool history exceeded the input budget. Answer from the conversation and report that the tool results could not be retained.' }];
+        usedCalls = maxCalls;
+      }
+      assertInputBudget(history, instructions, definitions);
       const result = await createResponse({
         baseUrl: this.baseUrl,
         model: this.modelId,
@@ -96,7 +112,7 @@ class ProviderModel implements TextModel {
         reasoningEffort,
         timeoutMs: this.timeoutMs,
         signal,
-        tools: tools.map((tool) => tool.definition),
+        tools: definitions,
         toolChoice: usedCalls >= maxCalls ? 'none' : 'auto'
       });
       const raw = result.raw;
@@ -115,7 +131,7 @@ class ProviderModel implements TextModel {
       if (usedCalls >= maxCalls) {
         throw new Error('Model continued calling tools after the tool budget was exhausted.');
       }
-      history.push(...output);
+      const turn = [...output];
       for (const call of calls) {
         if (typeof call.call_id !== 'string' || !call.call_id || typeof call.name !== 'string' ||
           typeof call.arguments !== 'string' || callIds.has(call.call_id)) {
@@ -126,8 +142,9 @@ class ProviderModel implements TextModel {
           ? await runner.execute(call.name, call.arguments, signal)
           : JSON.stringify({ ok: false, error: 'Tool budget exhausted; answer using existing results.' });
         usedCalls += 1;
-        history.push({ type: 'function_call_output', call_id: call.call_id, output: toolOutput });
+        turn.push({ type: 'function_call_output', call_id: call.call_id, output: boundedText(toolOutput, TOOL_RESULT_TOKENS) });
       }
+      turns.push(turn);
     }
     throw new Error('Tool calling exceeded the round limit.');
   }

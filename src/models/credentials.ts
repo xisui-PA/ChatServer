@@ -125,9 +125,10 @@ class MacOsKeychainStore implements CredentialStore {
         secret,
         '-U'
       ]);
-    } catch (error) {
+    } catch {
+      // execFile errors include the full command, including the password argument.
       throw new CredentialError(
-        `Unable to store the API key in the ${this.name}: ${(error as Error).message}`
+        `Unable to store the API key in the ${this.name}. Check Keychain access permissions.`
       );
     }
   }
@@ -183,10 +184,10 @@ class SecretServiceStore implements CredentialStore {
         ],
         secret
       );
-    } catch (error) {
+    } catch {
       throw new CredentialError(
         `Unable to store the API key in the ${this.name}. ` +
-          `Install libsecret and make sure a keyring is running. ${(error as Error).message}`
+          'Install libsecret and make sure a keyring is running.'
       );
     }
   }
@@ -230,7 +231,7 @@ class WindowsCredentialStore implements CredentialStore {
       if ((error as { code?: number }).code === 3) {
         return undefined;
       }
-      throw new CredentialError(this.installHint(error));
+      throw new CredentialError(this.installHint());
     }
   }
 
@@ -247,8 +248,8 @@ class WindowsCredentialStore implements CredentialStore {
       await run('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
         CHATSERVER_SECRET: secret
       });
-    } catch (error) {
-      throw new CredentialError(this.installHint(error));
+    } catch {
+      throw new CredentialError(this.installHint());
     }
   }
 
@@ -270,10 +271,10 @@ class WindowsCredentialStore implements CredentialStore {
     return `${CREDENTIAL_SERVICE}:${account}`;
   }
 
-  private installHint(error: unknown): string {
+  private installHint(): string {
     return (
       `Unable to use the ${this.name}. Install the CredentialManager PowerShell module ` +
-      `(Install-Module CredentialManager -Scope CurrentUser). ${(error as Error).message}`
+      '(Install-Module CredentialManager -Scope CurrentUser). Check credential manager access permissions.'
     );
   }
 }

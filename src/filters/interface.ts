@@ -1,4 +1,4 @@
-import { IncomingMessage } from '../messagers/interface';
+import { ConversationMessage, IncomingMessage } from '../messagers/interface';
 
 /**
  * Decision from an individual filter or a chain of filters.
@@ -18,6 +18,8 @@ export enum FilterOutcome {
 export interface FilterAdapter {
   /** Human-readable adapter name, used in logs. */
   readonly name: string;
+  /** Removes excluded sources before any filter model or replier sees them. */
+  selectMessages?(messages: readonly ConversationMessage[]): Promise<readonly ConversationMessage[]>;
   /** Decides whether `message` should be replied to. */
   shouldReply(message: IncomingMessage): FilterOutcome | Promise<FilterOutcome>;
 }
@@ -29,6 +31,8 @@ export interface FilterEvaluation {
   outcome: FilterOutcome;
   /** Name of the filter that produced the decision, when there was one. */
   decidedBy?: string;
+  /** Evaluation failed closed; the caller may retry before attempting delivery. */
+  error?: unknown;
 }
 
 /**
@@ -47,10 +51,7 @@ export async function evaluateFilters(
     try {
       result = await filter.shouldReply(message);
     } catch (error) {
-      console.error(
-        `[chat] filter "${filter.name}" failed: ${(error as Error).message}; dropping message`
-      );
-      return { outcome: FilterOutcome.Denied, decidedBy: filter.name };
+      return { outcome: FilterOutcome.Denied, decidedBy: filter.name, error };
     }
 
     if (result !== FilterOutcome.Optional) {

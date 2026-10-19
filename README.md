@@ -68,7 +68,7 @@ ChatServer/
 
 ## Requirements
 
-- Node.js 18 or newer
+- Node.js 22.22.2+ (22.x), or 24.15.0+ (including newer major versions), matching the build/lint toolchain
 
 ## Getting started
 
@@ -195,8 +195,9 @@ from other accounts or in groups are silently ignored. Surrounding whitespace is
 accepted; commands are recognized individually even inside a message bundle.
 
 The report includes server uptime, pipeline count, queued conversations/messages,
-pending status requests, delivery/failure counts, last successful delivery, and
-the receiving adapter's cached polling health. It uses local observations without
+pending status requests/retries, processing and filter errors, delivery/failure
+counts, last successful delivery, and the receiving adapter's cached polling health
+including failed chats and the age of its last error. It uses local observations without
 model calls or additional API requests. It excludes message contents, credentials,
 and configuration paths. Delivery counters include status reports and reset on
 restart.
@@ -263,11 +264,15 @@ The adapter itself does not read environment variables or token files.
 The adapter checks login status and paginates `/api/chats`, then reads messages
 for changed chats. It does not open chats or clear unread counts. Polling failures
 increase the delay exponentially, up to 64 times the configured interval; success
-restores the normal interval. Missing database keys may still cause the upstream
+restores the normal interval. A failed message read backs off only that chat, so
+healthy chats (including the main account) continue polling at the normal interval.
+Authentication and chat-list failures back off the whole adapter. Missing database keys may still cause the upstream
 API to extract keys; the adapter cannot disable that upstream behavior.
 
-Only incoming text and image messages with an identified sender and `isSelf: false` enter
-the pipeline. Messages from before adapter startup are skipped. Cursors and
+Incoming text and image messages with an identified sender and `isSelf: false`
+can trigger replies. Self text/images are retained as context only and never
+trigger replies on their own. A self message arriving during generation invalidates
+the stale answer; a later turn uses the updated context. Messages from before adapter startup are skipped. Cursors and
 message deduplication are kept in memory; messages received while ChatServer is
 stopped are not replayed after restart. Keep the machines' clocks synchronized.
 Account changes reset the cursors and history cutoff.
@@ -295,16 +300,20 @@ position. Conversations and context are isolated by pipeline and WeChat account.
 
 Before selecting a conversation and building its snapshot, the server waits a
 fresh random 2–5 minutes, including before the first reply. Polling continues
-during the wait. Filters and the replier then see all retained incoming messages
+during the wait. Filters and the replier then see retained incoming and self messages
 since the last successful reply, capped at the latest 30 individual messages in
 order, with their original senders and timestamps. There is no age cutoff.
 
 A successful reply clears only the messages in that snapshot. Messages received
 during generation or delivery are kept, and the conversation returns to the back
 of the queue. If filters deny the snapshot, the model declines, or processing
-fails, its bounded context is retained until a later successful reply. Only new
-arrivals schedule another turn; unchanged snapshots and failed sends are never
-retried automatically. A skipped conversation does not consume the send slot,
+fails, its bounded context is retained until a later successful reply. Timeouts,
+network errors, HTTP 408/429/5xx responses, and pending media can schedule up to two
+pre-delivery retries, after 30 and 60 seconds, at the FIFO tail. Each retry also
+respects normal send-slot pacing; other conversations can proceed while it waits.
+Permanent errors and ordinary filter/model declines await new input. Failed sends
+are never retried automatically because delivery may have succeeded remotely.
+A skipped conversation does not consume the send slot,
 so the next conversation can be processed immediately.
 
 Model processing and delivery remain sequential. Each send attempt consumes the
@@ -346,11 +355,13 @@ image data for that turn, including across application-managed tool calls.
 Both the configured reply model and any model filters that receive images must
 support [image inputs](https://developers.openai.com/api/docs/guides/images-vision).
 GIF inputs remain subject to the provider's animation restrictions. Images beyond
-the snapshot limit are labeled omitted. Pending, expired, URL-only, oversized,
-unsupported-format, and failed media responses are labeled unavailable; other
-messages still proceed, and the model is instructed not to guess missing image
-contents. There is no automatic media retry loop; a later turn can attempt to load
-retained image references again. Video, voice, stickers, and file input are skipped.
+the snapshot limit are labeled omitted. Pending media and transient download
+failures defer the snapshot before model generation, with up to three attempts
+per image. This prevents a generic reply from clearing an image that is still
+loading. After exhaustion, or for expired, URL-only, oversized, and unsupported
+images, the image is labeled unavailable and remaining text can proceed. The
+model is instructed not to guess missing image contents. Video, voice, stickers,
+and file input are skipped.
 
 Image descriptions, visual questions, and OCR are supported. Prompts still exclude
 image/video generation and modification, and file summarization/generation/editing.
@@ -384,7 +395,9 @@ client-7
   directory; absolute paths are used as-is.
 - `options.senderIds` may still be used for small inline lists. Inline IDs are combined
   with the file.
-- A conversation snapshot containing any ignored sender is denied as a whole.
+- Ignored sources are removed before buffering and before any model sees a snapshot,
+  regardless of filter order. They cannot evict other senders' buffered messages
+  or block a mixed group snapshot. An ignored-only turn produces no reply.
 
 Chats that use the same messager type share the same file by default. Give each chat its
 own `options.file` when they need separate lists.
@@ -574,6 +587,8 @@ for supported requests. Filter and replier prompts ignore requests for image/vid
 generation or modification and file summarization, generation, or modification.
 These exclusions override filter requirements; internal memory updates remain enabled.
 Malformed replies and provider errors are logged without sending fallback text.
+Malformed or missing internal memory updates are discarded with a warning; a valid
+public reply is still delivered.
 
 Repliers aim for a soft limit of **150 tokens**, with a hard limit of **200 tokens**
 on the outgoing `text`, including URLs. The prompt requests concise replies; any
@@ -585,12 +600,22 @@ reply text, not the JSON envelope, memory notes, tool results, or internal reaso
 Requests include the current conversation snapshot, sender IDs, channel, and
 retained conversation memory, plus supported images as separate image parts.
 Other attachment types are not sent to the model.
+Conversation JSON is capped at **8,000 tokens**, with individual message text
+capped at **2,000 tokens** and older messages omitted as necessary. Truncated text
+is labeled. All model requests also have an application input budget of **24,000
+tokens**, counting serialized text, instructions, tool definitions, and a reserve
+of 2,048 tokens per image. These are application estimates rather than a guarantee
+of compatibility with every provider's context window. Tool results are capped
+at 1,200 tokens; older complete tool rounds are removed when necessary, preserving
+function-call/result pairs. If the latest round alone is too large, the final
+request omits tool history and reports that limitation to the model.
 Individual model requests use their provider's `timeoutMs` from `models.json`,
 defaulting to three minutes when omitted.
 For repliers using tools, the same setting also caps the entire generation,
 including all model/tool rounds. The clock starts when model generation begins,
-after the reply delay and image retrieval. Requests are cancelled during server shutdown. Failed
-model requests and sends are not retried automatically.
+after the reply delay and image retrieval. Requests and scheduled retries are
+cancelled during server shutdown. Only transient failures before delivery are
+retried automatically, as described above; sends are never automatically retried.
 
 ### Conversation memory
 

@@ -1,5 +1,5 @@
-import { IncomingMessage, MessageHandler, MessagerAdapter, MessagerStatus, OutgoingMessage } from './interface';
-import { imageDataUrl, MAX_ENCODED_IMAGE_BYTES } from './images';
+import { ImageLoadResult, IncomingMessage, MessageHandler, MessagerAdapter, MessagerStatus, OutgoingMessage } from './interface';
+import { ImageUnavailableError, imageDataUrl, MAX_ENCODED_IMAGE_BYTES } from './images';
 
 /** Options for the outbound-only agent-wechat REST adapter. */
 export interface WechatMessagerOptions {
@@ -31,6 +31,13 @@ interface WechatMessage {
   [key: string]: unknown;
 }
 
+/** Retains HTTP status for media retry classification without retaining response bodies. */
+class WechatRequestError extends Error {
+  public constructor(public readonly status: number, endpoint: string) {
+    super(`WeChat ${endpoint.split('?')[0]} returned HTTP ${status}.`);
+  }
+}
+
 /** Checks REST payloads before using their fields. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -53,6 +60,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
   private readonly timeout: number;
   private readonly bundleGap: number;
   private readonly cursors = new Map<string, Cursor>();
+  private readonly chatFailures = new Map<string, { count: number; retryAt: number }>();
   private readonly operations = new Set<AbortController>();
   private readonly token: string;
   private account?: string;
@@ -63,6 +71,8 @@ export class WechatMessagerAdapter implements MessagerAdapter {
   private sending: Promise<void> = Promise.resolve();
   private failures = 0;
   private lastSuccessfulPollAt?: string;
+  private lastPollError?: string;
+  private lastPollErrorAt?: string;
 
   public constructor(token: string, private readonly options: WechatMessagerOptions = {}) {
     this.token = token.trim();
@@ -86,8 +96,11 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     }
     this.startedAt = Date.now();
     this.cursors.clear();
+    this.chatFailures.clear();
     this.failures = 0;
     this.lastSuccessfulPollAt = undefined;
+    this.lastPollError = undefined;
+    this.lastPollErrorAt = undefined;
     this.handler = handler;
     try {
       this.account = await this.readAccount();
@@ -107,6 +120,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     }
     await Promise.allSettled([this.polling, this.sending]);
     this.cursors.clear();
+    this.chatFailures.clear();
     this.account = undefined;
   }
 
@@ -145,33 +159,51 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     localId: number,
     account: string | undefined,
     signal?: AbortSignal
-  ): Promise<string | undefined> {
+  ): Promise<ImageLoadResult> {
     this.requireAccount(account);
-    const result = await this.request(
-      `/api/messages/${encodeURIComponent(chatId)}/media/${localId}?quality=best`,
-      undefined,
-      signal,
-      MAX_ENCODED_IMAGE_BYTES + 64 * 1024
-    );
+    let result: unknown;
+    try {
+      result = await this.request(
+        `/api/messages/${encodeURIComponent(chatId)}/media/${localId}?quality=best`,
+        undefined,
+        signal,
+        MAX_ENCODED_IMAGE_BYTES + 64 * 1024
+      );
+    } catch (error) {
+      if (error instanceof WechatRequestError && error.status >= 400 && error.status < 500 &&
+        error.status !== 408 && error.status !== 429) {
+        throw new ImageUnavailableError('WeChat image media is unavailable.');
+      }
+      throw error;
+    }
     this.requireAccount(account);
     if (!isRecord(result) || typeof result.type !== 'string') {
       throw new Error('Unexpected WeChat image media response.');
     }
-    // Pending/expired media and URL-only responses are unavailable for this turn.
     if (result.type !== 'image' || result.data === undefined || result.data === null) {
-      return undefined;
+      if (result.retryable === true || (result.type === 'pending' && result.retryable !== false)) {
+        return { status: 'pending' };
+      }
+      return { status: 'unavailable' };
     }
     if (typeof result.data !== 'string') {
-      throw new Error('WeChat image data must be a base64 string.');
+      throw new ImageUnavailableError('WeChat image data must be a base64 string.');
     }
-    return imageDataUrl(result.data);
+    try {
+      return { status: 'ready', dataUrl: imageDataUrl(result.data) };
+    } catch {
+      return { status: 'unavailable' };
+    }
   }
 
   public getStatus(): MessagerStatus {
     return {
       active: this.handler !== undefined,
       lastSuccessfulPollAt: this.lastSuccessfulPollAt,
-      consecutivePollFailures: this.failures
+      consecutivePollFailures: this.failures,
+      failedChats: this.chatFailures.size,
+      lastPollError: this.lastPollError,
+      lastPollErrorAt: this.lastPollErrorAt
     };
   }
 
@@ -186,6 +218,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       }).catch((error: unknown) => {
         if (this.handler !== undefined) {
           this.failures += 1;
+          this.recordPollError(error);
           console.error('[wechat] polling failed:', error instanceof Error ? error.message : error);
         }
       }).finally(() => {
@@ -211,6 +244,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       this.account = account;
       this.startedAt = Date.now();
       this.cursors.clear();
+      this.chatFailures.clear();
     }
     const chats: Record<string, unknown>[] = [];
     const pageSize = 100;
@@ -224,13 +258,21 @@ export class WechatMessagerAdapter implements MessagerAdapter {
         break;
       }
     }
-    const failures: unknown[] = [];
+    const activeIds = new Set(chats.map((chat) => chat.id as string));
+    for (const chatId of this.chatFailures.keys()) {
+      if (!activeIds.has(chatId)) {
+        this.chatFailures.delete(chatId);
+      }
+    }
     for (const chat of chats) {
       if (this.handler === undefined) {
         return;
       }
       const chatId = chat.id as string;
       if (this.options.chatIds !== undefined && !this.options.chatIds.includes(chatId)) {
+        continue;
+      }
+      if ((this.chatFailures.get(chatId)?.retryAt ?? 0) > Date.now()) {
         continue;
       }
       const cursor = this.cursors.get(chatId) ?? { timestamp: this.startedAt, ids: new Set<number>() };
@@ -247,15 +289,22 @@ export class WechatMessagerAdapter implements MessagerAdapter {
         }
         cursor.signature = hadMessages ? signature : undefined;
         this.cursors.set(chatId, cursor);
+        this.chatFailures.delete(chatId);
       } catch (error) {
         console.error(`[wechat] failed to read chat ${chatId}:`,
           error instanceof Error ? error.message : error);
-        failures.push(error);
+        this.recordPollError(error);
+        const count = (this.chatFailures.get(chatId)?.count ?? 0) + 1;
+        this.chatFailures.set(chatId, {
+          count, retryAt: Date.now() + Math.min(2_147_483_647, this.interval * 2 ** Math.min(count, 6))
+        });
       }
     }
-    if (failures.length > 0) {
-      throw new AggregateError(failures, `Failed to read ${failures.length} WeChat chat(s).`);
-    }
+  }
+
+  private recordPollError(error: unknown): void {
+    this.lastPollError = error instanceof Error ? error.message : 'Unknown polling error';
+    this.lastPollErrorAt = new Date().toISOString();
   }
 
   private async pollChat(chatId: string, cursor: Cursor): Promise<boolean> {
@@ -315,6 +364,13 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       const timestamp = Date.parse(message.timestamp);
       const alreadySeen = timestamp < cursor.timestamp ||
         (timestamp === cursor.timestamp && cursor.ids.has(message.localId));
+      if (!alreadySeen && message.isSelf === true &&
+        ((message.type === 1 && message.content) || message.type === 3)) {
+        flush();
+        this.dispatchBundle(chatId, [message]);
+        this.advanceCursor(cursor, message);
+        continue;
+      }
       const eligible = message.isSelf === false && message.sender &&
         ((message.type === 1 && message.content) || message.type === 3);
       if (alreadySeen || !eligible) {
@@ -341,20 +397,23 @@ export class WechatMessagerAdapter implements MessagerAdapter {
   private dispatchBundle(chatId: string, messages: readonly WechatMessage[]): void {
     const first = messages[0];
     const last = messages[messages.length - 1];
-    if (first.sender === undefined) {
+    const sender = first.isSelf ? this.account : first.sender;
+    if (sender === undefined) {
       return;
     }
     const account = this.account;
     const text = messages.map((message) => message.type === 3 ? '[Image]' : message.content).join('\n');
     this.handler?.({
       text,
-      senderId: first.sender,
+      senderId: sender,
+      isSelf: first.isSelf === true,
       timestamp: last.timestamp,
       channel: chatId,
       messages: messages.map((message) => ({
         id: `message:${message.localId}`,
         text: message.type === 3 ? '[Image]' : message.content,
-        senderId: message.sender as string,
+        senderId: message.isSelf ? account as string : message.sender as string,
+        isSelf: message.isSelf === true,
         timestamp: message.timestamp,
         images: message.type === 3 ? [{
           id: `image:${message.localId}`,
@@ -402,14 +461,14 @@ export class WechatMessagerAdapter implements MessagerAdapter {
         signal: controller.signal
       });
       if (!response.ok) {
-        throw new Error(`WeChat ${endpoint.split('?')[0]} returned HTTP ${response.status}.`);
+        throw new WechatRequestError(response.status, endpoint);
       }
       if (maxBytes === undefined) {
         return await response.json() as unknown;
       }
       if (Number(response.headers.get('content-length')) > maxBytes) {
         controller.abort();
-        throw new Error('WeChat image media response exceeds the size limit.');
+        throw new ImageUnavailableError('WeChat image media response exceeds the size limit.');
       }
       if (response.body === null) {
         throw new Error('WeChat image media response has no body.');
@@ -426,7 +485,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
           size += chunk.value.byteLength;
           if (size > maxBytes) {
             controller.abort();
-            throw new Error('WeChat image media response exceeds the size limit.');
+            throw new ImageUnavailableError('WeChat image media response exceeds the size limit.');
           }
           chunks.push(chunk.value);
         }
