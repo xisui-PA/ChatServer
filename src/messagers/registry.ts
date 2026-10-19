@@ -61,7 +61,7 @@ export function createMessager(
 
 registerMessager('wechat', (options, context) => {
   const label = `messager "wechat" (chat "${context.chatName}")`;
-  const known = ['baseUrl', 'tokenEnv', 'tokenFile', 'chatIds', 'pollIntervalMs', 'timeoutMs'];
+  const known = ['baseUrl', 'tokenEnv', 'tokenFile', 'chatIds', 'pollIntervalMs', 'timeoutMs', 'bundleGapMs'];
   for (const key of Object.keys(options)) {
     if (!known.includes(key)) {
       throw new Error(`${label}: unknown option "${key}".`);
@@ -73,7 +73,7 @@ registerMessager('wechat', (options, context) => {
       throw new Error(`${label}: option "${key}" must be a non-empty string.`);
     }
   }
-  for (const key of ['pollIntervalMs', 'timeoutMs']) {
+  for (const key of ['pollIntervalMs', 'timeoutMs', 'bundleGapMs']) {
     if (options[key] !== undefined && typeof options[key] !== 'number') {
       throw new Error(`${label}: option "${key}" must be a number.`);
     }
@@ -94,6 +94,7 @@ registerMessager('wechat', (options, context) => {
     baseUrl: options.baseUrl as string | undefined,
     chatIds: options.chatIds as string[] | undefined,
     pollIntervalMs: options.pollIntervalMs as number | undefined,
-    timeoutMs: options.timeoutMs as number | undefined
+    timeoutMs: options.timeoutMs as number | undefined,
+    bundleGapMs: options.bundleGapMs as number | undefined
   });
 });

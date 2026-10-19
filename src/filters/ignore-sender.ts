@@ -10,7 +10,7 @@ function isSenderIdSource(value: readonly string[] | SenderIdSource): value is S
 }
 
 /**
- * Reference filter that never replies to the listed senders and abstains for everyone else.
+ * Denies messages or snapshots containing a listed sender and abstains otherwise.
  *
  * The list may be fixed or come from a {@link SenderIdSource} such as `IgnoreFile`, which
  * lets the list change while the server is running.
@@ -28,6 +28,8 @@ export class IgnoreSenderFilter implements FilterAdapter {
 
   public async shouldReply(message: IncomingMessage): Promise<FilterOutcome> {
     const senderIds = await this.source.getSenderIds();
-    return senderIds.has(message.senderId) ? FilterOutcome.Denied : FilterOutcome.Optional;
+    const messages = message.messages ?? [message];
+    return messages.some((item) => senderIds.has(item.senderId))
+      ? FilterOutcome.Denied : FilterOutcome.Optional;
   }
 }

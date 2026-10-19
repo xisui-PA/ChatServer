@@ -6,10 +6,12 @@ export interface WechatMessagerOptions {
   baseUrl?: string;
   /** Optional list of chat IDs to monitor. Omit to monitor all chats. */
   chatIds?: readonly string[];
-  /** Delay between completed polls. Defaults to 5000 ms. */
+  /** Delay between completed polls. Defaults to 30000 ms. */
   pollIntervalMs?: number;
   /** Timeout for each REST request. Defaults to 30000 ms. */
   timeoutMs?: number;
+  /** Maximum timestamp gap for consecutive-message bundles. Defaults to 10000 ms; 0 disables bundling. */
+  bundleGapMs?: number;
 }
 
 interface Cursor {
@@ -48,8 +50,9 @@ export class WechatMessagerAdapter implements MessagerAdapter {
   private readonly baseUrl: string;
   private readonly interval: number;
   private readonly timeout: number;
+  private readonly bundleGap: number;
   private readonly cursors = new Map<string, Cursor>();
-  private readonly requests = new Set<AbortController>();
+  private readonly operations = new Set<AbortController>();
   private readonly token: string;
   private account?: string;
   private handler?: MessageHandler;
@@ -70,8 +73,9 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       throw new Error('WeChat baseUrl must be an HTTP(S) URL without credentials, query, or fragment.');
     }
     this.baseUrl = url.toString().replace(/\/+$/, '');
-    this.interval = duration(options.pollIntervalMs, 5000, 'pollIntervalMs');
+    this.interval = duration(options.pollIntervalMs, 30000, 'pollIntervalMs');
     this.timeout = duration(options.timeoutMs, 30000, 'timeoutMs');
+    this.bundleGap = options.bundleGapMs === 0 ? 0 : duration(options.bundleGapMs, 10000, 'bundleGapMs');
   }
 
   public async start(handler: MessageHandler): Promise<void> {
@@ -95,7 +99,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
   public async stop(): Promise<void> {
     this.handler = undefined;
     clearTimeout(this.timer);
-    for (const controller of this.requests) {
+    for (const controller of this.operations) {
       controller.abort();
     }
     await Promise.allSettled([this.polling, this.sending]);
@@ -103,24 +107,29 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     this.account = undefined;
   }
 
-  /** Serializes sends because the upstream server drives a shared WeChat UI. */
-  public reply(message: IncomingMessage, reply: OutgoingMessage): Promise<void> {
+  /** Serializes deliveries; the server schedules the delay before building its snapshot. */
+  public reply(message: IncomingMessage, reply: OutgoingMessage, signal?: AbortSignal): Promise<void> {
     const send = this.sending.then(async () => {
-      if (this.handler === undefined || message.metadata?.wechatAccount !== this.account) {
-        throw new Error('WeChat adapter is stopped or the originating account has changed.');
-      }
+      this.requireActiveAccount(message);
+      signal?.throwIfAborted();
       const chatId = reply.direct ? message.senderId : reply.channel ?? message.channel;
       if (!chatId) {
         throw new Error('WeChat reply requires a destination chat ID.');
       }
-      const result = await this.request('/api/messages/send', { chatId, text: reply.text });
+      const result = await this.request('/api/messages/send', { chatId, text: reply.text }, signal);
       if (!isRecord(result) || result.success !== true) {
         throw new Error('WeChat rejected the message send. Check the agent-server logs.');
       }
     });
-    // Keep later sends usable after a rejection. Never retry a send automatically.
+    // A failed attempt must not poison the queue or cause an automatic retry.
     this.sending = send.catch(() => {});
     return send;
+  }
+
+  private requireActiveAccount(message: IncomingMessage): void {
+    if (this.handler === undefined || message.metadata?.wechatAccount !== this.account) {
+      throw new Error('WeChat adapter is stopped or the originating account has changed.');
+    }
   }
 
   private schedule(delay: number): void {
@@ -207,7 +216,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
 
   private async pollChat(chatId: string, cursor: Cursor): Promise<boolean> {
     const messages = new Map<number, WechatMessage>();
-    const pageSize = 100;
+    const pageSize = 50;
     let hadMessages = false;
     // The upstream API sorts newest first. Page back to the previous timestamp,
     // including its entire second so messages with equal timestamps aren't lost.
@@ -232,7 +241,9 @@ export class WechatMessagerAdapter implements MessagerAdapter {
         const timestamp = Date.parse(message.timestamp);
         if (timestamp < cursor.timestamp) {
           reachedHistory = true;
-        } else if (timestamp > cursor.timestamp || !cursor.ids.has(message.localId)) {
+        } else {
+          // Keep already-seen rows at the cursor timestamp as boundaries too:
+          // newly discovered messages must not merge across a self/other sender.
           messages.set(message.localId, message);
         }
       }
@@ -240,35 +251,99 @@ export class WechatMessagerAdapter implements MessagerAdapter {
         break;
       }
     }
+    let bundle: WechatMessage[] = [];
+    const flush = () => {
+      if (bundle.length === 0) {
+        return;
+      }
+      this.dispatchBundle(chatId, bundle);
+      for (const message of bundle) {
+        this.advanceCursor(cursor, message);
+      }
+      bundle = [];
+    };
+
     for (const message of [...messages.values()].sort((a, b) =>
       Date.parse(a.timestamp) - Date.parse(b.timestamp) || a.localId - b.localId)) {
       if (this.handler === undefined) {
         return hadMessages;
       }
-      if (message.isSelf === false && message.type === 1 && message.content && message.sender) {
-        this.handler({
-          text: message.content,
-          senderId: message.sender,
-          channel: chatId,
-          metadata: { ...message, wechatAccount: this.account }
-        });
-      }
       const timestamp = Date.parse(message.timestamp);
-      if (timestamp > cursor.timestamp) {
-        cursor.timestamp = timestamp;
-        cursor.ids.clear();
+      const alreadySeen = timestamp < cursor.timestamp ||
+        (timestamp === cursor.timestamp && cursor.ids.has(message.localId));
+      const eligible = message.isSelf === false && message.type === 1 &&
+        message.content && message.sender;
+      if (alreadySeen || !eligible) {
+        // Even messages we don't deliver interrupt conversational adjacency.
+        flush();
+        if (!alreadySeen) {
+          this.advanceCursor(cursor, message);
+        }
+        continue;
       }
-      cursor.ids.add(message.localId);
+      const previous = bundle.at(-1);
+      if (previous !== undefined && (this.bundleGap === 0 ||
+        message.sender !== previous.sender ||
+        timestamp - Date.parse(previous.timestamp) > this.bundleGap)) {
+        flush();
+      }
+      bundle.push(message);
     }
+    flush();
     return hadMessages;
   }
 
-  private async request(endpoint: string, body?: unknown): Promise<unknown> {
+  /** Delivers one conversational turn, preserving the source messages for metadata consumers. */
+  private dispatchBundle(chatId: string, messages: readonly WechatMessage[]): void {
+    const first = messages[0];
+    const last = messages[messages.length - 1];
+    if (first.sender === undefined) {
+      return;
+    }
+    const text = messages.map((message) => message.content).join('\n');
+    this.handler?.({
+      text,
+      senderId: first.sender,
+      timestamp: last.timestamp,
+      channel: chatId,
+      messages: messages.map((message) => ({
+        id: `message:${message.localId}`,
+        text: message.content,
+        senderId: message.sender as string,
+        timestamp: message.timestamp
+      })),
+      metadata: {
+        ...last,
+        content: text,
+        wechatAccount: this.account,
+        localIds: messages.map((message) => message.localId),
+        firstTimestamp: first.timestamp,
+        lastTimestamp: last.timestamp,
+        messages: [...messages]
+      }
+    });
+  }
+
+  private advanceCursor(cursor: Cursor, message: WechatMessage): void {
+    const timestamp = Date.parse(message.timestamp);
+    if (timestamp > cursor.timestamp) {
+      cursor.timestamp = timestamp;
+      cursor.ids.clear();
+    }
+    cursor.ids.add(message.localId);
+  }
+
+  private async request(endpoint: string, body?: unknown, signal?: AbortSignal): Promise<unknown> {
     if (this.handler === undefined) {
       throw new Error('WeChat adapter is stopped.');
     }
     const controller = new AbortController();
-    this.requests.add(controller);
+    const cancel = () => controller.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) {
+      controller.abort();
+    }
+    this.operations.add(controller);
     const timer = setTimeout(() => controller.abort(), this.timeout);
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
@@ -283,7 +358,8 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       return await response.json() as unknown;
     } finally {
       clearTimeout(timer);
-      this.requests.delete(controller);
+      signal?.removeEventListener('abort', cancel);
+      this.operations.delete(controller);
     }
   }
 }

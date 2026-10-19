@@ -10,9 +10,11 @@ ChatServer/
 │   ├── launch.json      # Debug configurations (ts-node + compiled output)
 │   └── tasks.json       # Build / dev / clean tasks
 ├── src/
+│   ├── conversations/
+│   │   ├── interface.ts        # Timestamped memory notes and model update schema
+│   │   └── memory-store.ts     # Atomic per-conversation persistence and expiry
 │   ├── filters/
 │   │   ├── interface.ts        # FilterAdapter interface + chain evaluation
-│   │   ├── allow-all.ts        # AllowAllFilter implementation
 │   │   ├── model.ts            # LLM filter returning FilterOutcome
 │   │   ├── ignore-sender.ts    # IgnoreSenderFilter implementation
 │   │   ├── ignore-file.ts      # File-backed sender list with live reload
@@ -33,7 +35,8 @@ ChatServer/
 │   │   └── html.ts             # HTML text extraction
 │   ├── repliers/
 │   │   ├── interface.ts        # Replier interface
-│   │   └── model.ts            # ModelReplier: LLM replies and optional decisions
+│   │   ├── model.ts            # ModelReplier: LLM replies and optional decisions
+│   │   └── limits.ts           # Soft/hard outgoing reply token limits
 │   ├── models/
 │   │   ├── chatserver-models.ts # Unified CLI entry point and dispatcher
 │   │   ├── add.ts              # `add` command
@@ -47,6 +50,7 @@ ChatServer/
 │   │   ├── responses-client.ts # OpenAI Responses API client
 │   │   ├── reference.ts        # provider/model-id reference parsing
 │   │   ├── runtime.ts          # Runtime model and credential binding
+│   │   ├── tokens.ts           # Shared reply and memory token accounting
 │   │   └── cli-support.ts      # Shared argument parsing and prompts
 │   ├── index.ts         # Entry point: CLI parsing, startup, and shutdown
 │   ├── server.ts        # Message pipeline wiring and adapter lifecycle
@@ -120,7 +124,8 @@ A config folder contains:
 
 ```
 ~/Library/Application Support/chatserver/
-├── config.json          # required; created with defaults on first run
+├── config.json           # required; created with defaults on first run
+├── conversations/        # automatic; hashed per-conversation memory JSON files
 └── my-messager_ignore     # optional; one per messager that uses ignore-sender
 ```
 
@@ -170,8 +175,7 @@ Available implementations:
 
 | Kind | Name | Options |
 | ---- | ---- | ------- |
-| messager | `wechat` | `baseUrl`, `tokenEnv`, `tokenFile`, `chatIds`, `pollIntervalMs`, `timeoutMs` |
-| filter | `allow-all` | none |
+| messager | `wechat` | `baseUrl`, `tokenEnv`, `tokenFile`, `chatIds`, `pollIntervalMs`, `timeoutMs`, `bundleGapMs` |
 | filter | `ignore` / `ignore-sender` | `file` (string), `senderIds` (string array) |
 | filter | `model` | Top-level `model` reference required; `options.instructions` customizes decision criteria |
 
@@ -219,8 +223,9 @@ The adapter itself does not read environment variables or token files.
 | `tokenEnv` | `AGENT_WECHAT_TOKEN` | Environment variable containing the bearer token |
 | `tokenFile` | unset | Token file used when the environment token is absent |
 | `chatIds` | all chats | Chat IDs to monitor; an empty array monitors none |
-| `pollIntervalMs` | `5000` | Delay in milliseconds after a completed poll |
+| `pollIntervalMs` | `30000` | Delay in milliseconds after a completed poll |
 | `timeoutMs` | `30000` | Timeout in milliseconds for each request |
+| `bundleGapMs` | `10000` | Maximum gap between consecutive messages in a bundle; `0` disables bundling |
 
 The adapter checks login status and paginates `/api/chats`, then reads messages
 for changed chats. It does not open chats or clear unread counts. Polling failures
@@ -234,15 +239,54 @@ message deduplication are kept in memory; messages received while ChatServer is
 stopped are not replayed after restart. Keep the machines' clocks synchronized.
 Account changes reset the cursors and history cutoff.
 
+Within each poll, incoming text messages are bundled for dispatch when they are
+consecutive in the same conversation, have the same sender, and each timestamp is
+at most `bundleGapMs` after the previous message. This applies to direct chats and
+group/channel conversations. Another sender, a self message, or a skipped non-text
+message ends the bundle. Messages in different conversations are never combined.
+The bundle is dispatched when processing that poll finishes; it does not wait for
+future polls.
+
+Bundled text is joined with newlines. The adapter also supplies normalized source
+`messages` with each sender, text, and timestamp, so a bundle of 30 messages counts
+as 30 messages toward the snapshot limit. Metadata retains every source message
+in `messages`, all `localIds`, and
+`firstTimestamp`/`lastTimestamp`; singular fields such as `localId` and `timestamp`
+refer to the last source message. Every source ID is still tracked for deduplication.
+
 Replies go to the originating conversation, including groups. `reply.channel`
 overrides the destination; `direct: true` sends to the originating sender instead.
-Sends are serialized and are never retried automatically. Media is not supported.
+The server keeps one pending entry per conversation in a FIFO queue across all
+configured pipelines. New messages update its context without changing its queue
+position. Conversations and context are isolated by pipeline and WeChat account.
+
+Before selecting a conversation and building its snapshot, the server waits a
+fresh random 2–5 minutes, including before the first reply. Polling continues
+during the wait. Filters and the replier then see all retained incoming messages
+since the last successful reply, capped at the latest 30 individual messages in
+order, with their original senders and timestamps. There is no age cutoff.
+
+A successful reply clears only the messages in that snapshot. Messages received
+during generation or delivery are kept, and the conversation returns to the back
+of the queue. If filters deny the snapshot, the model declines, or processing
+fails, its bounded context is retained until a later successful reply. Only new
+arrivals schedule another turn; unchanged snapshots and failed sends are never
+retried automatically. A skipped conversation does not consume the send slot,
+so the next conversation can be processed immediately.
+
+Model processing and delivery remain sequential. Each send attempt consumes the
+slot, so another random delay is required before the next attempt. The delay is
+fixed in code and cannot be configured. Shutdown cancels pending delays. Media is
+not supported.
+
+The random delay does not guarantee protection from WeChat account bans.
+Separate server instances do not share this in-memory limiter.
 Avoid configuring multiple pipelines to monitor the same WeChat conversations,
 which would cause duplicate replies.
 
 The configured `replyer` generates the response. With `filters: []`, the reply model
-decides whether a response is useful. Add `allow-all` to require a response for every
-eligible incoming text.
+decides whether a response is useful. When filters are omitted or empty, filter
+evaluation is skipped entirely.
 
 ### Ignore list file
 
@@ -269,6 +313,7 @@ client-7
   directory; absolute paths are used as-is.
 - `options.senderIds` may still be used for small inline lists. Inline IDs are combined
   with the file.
+- A conversation snapshot containing any ignored sender is denied as a whole.
 
 Chats that use the same messager type share the same file by default. Give each chat its
 own `options.file` when they need separate lists.
@@ -316,7 +361,6 @@ file per implementation. All of them are re-exported from `src/server.ts`.
 | File | Contents |
 | ---- | -------- |
 | `filters/interface.ts` | `FilterAdapter` interface and filter chain evaluation |
-| `filters/allow-all.ts` | `AllowAllFilter` |
 | `filters/ignore-sender.ts` | `IgnoreSenderFilter` |
 | `filters/ignore-file.ts` | `IgnoreFile` file-backed sender list and parser |
 | `filters/registry.ts` | Name → filter factory registry |
@@ -349,13 +393,18 @@ swapped (an app API, stdin/stdout, a queue, etc.).
 export interface MessagerAdapter {
   readonly name: string;
   start(handler: (message: IncomingMessage) => void): void | Promise<void>;
-  reply(message: IncomingMessage, reply: OutgoingMessage): void | Promise<void>;
+  reply(message: IncomingMessage, reply: OutgoingMessage, signal?: AbortSignal): void | Promise<void>;
   stop?(): void | Promise<void>;
 }
 ```
 
-`IncomingMessage` carries normalized `text`, a `senderId`, an optional `channel`, and
-adapter-specific `metadata`. `OutgoingMessage` carries the reply `text`, an optional
+`IncomingMessage` carries normalized `text`, a `senderId`, an optional source `id`,
+`timestamp` and `channel`, ordered source `messages` for bundles/snapshots, pruned
+conversation `memory`, and adapter-specific `metadata`. A snapshot's top-level
+sender and routing metadata come from the latest arrival; its `messages` preserve
+each individual author and timestamp. Source IDs and timestamps are assigned by
+the server when an adapter omits them.
+`OutgoingMessage` carries the reply `text`, an optional
 `channel`, and a `direct` flag (direct reply to the sender instead of a broadcast).
 
 `ChatServer` owns the configured pipelines. Construct it with
@@ -363,6 +412,17 @@ adapter-specific `metadata`. `OutgoingMessage` carries the reply `text`, an opti
 invocation, then call `await server.start()`. `await server.close()` stops the adapters.
 Startup failures stop adapters already started; repeated lifecycle calls reuse the
 same operation, and a closed instance cannot be restarted.
+
+Pending conversations use one FIFO queue across the entire server, with at most
+one entry per pipeline/account/conversation. The server waits for its random send
+slot before taking a snapshot of up to 30 incoming source messages. Filters,
+model/tool calls, and delivery finish before the next conversation is processed.
+New arrivals during processing return that conversation to the back of the queue.
+Context is cleared through the processed snapshot only after successful delivery;
+declined or failed turns retain context but await new arrivals before reprocessing.
+A failure is logged and the queue continues. Snapshots and queue state are held
+in memory; summarized context and confirmed sent replies persist separately.
+Shutdown cancels active delay/model/send work and discards queued work.
 Messager factories receive `chatName` and `configDir` as context.
 
 ### Filter adapter
@@ -412,8 +472,8 @@ await server.close();
 ```
 
 `IgnoreSenderFilter` also accepts a fixed string array for simple cases.
-`AllowAllFilter` is a minimal reference implementation. Adapters are plain objects, so
-custom filters need only implement `shouldReply` in their own module.
+Adapters are plain objects, so custom filters need only implement `shouldReply`
+in their own module.
 
 ### Runtime models
 
@@ -430,16 +490,83 @@ otherwise from the OS credential manager, using the same provider accounts as
 requests are sent during startup; they are made only for incoming messages.
 
 The runtime uses the existing Responses API compatible client. A model filter is
-instructed to return exactly `allowed`, `denied`, or `optional`. The reply model
-returns JSON with `reply` (boolean) and `text` (string). On an optional filter outcome,
+instructed to return exactly `allowed`, `denied`, or `optional`. Filter calls explicitly
+set `reasoning.effort` to `none`; choose a filter model/provider that supports disabling
+reasoning. Unsupported settings fail closed through the existing filter error path.
+Replier calls retain the provider's default reasoning behavior. The reply model
+returns JSON with `reply` (boolean), `text` (string), and internal `memoryUpdates`.
+On an optional filter outcome,
 `reply: false` suppresses the response; an allowed outcome requires a nonempty reply.
 Malformed replies and provider errors are logged without sending fallback text.
 
-Requests include the current message text, sender ID, and channel. Conversations
-are currently stateless: prior messages and attachments are not sent to the model.
+Repliers aim for a soft limit of **150 tokens**, with a hard limit of **200 tokens**
+on the outgoing `text`, including URLs. The prompt requests concise replies; any
+oversized reply is truncated locally before sending, preserving valid Unicode.
+The application uses `o200k_base` tokenization consistently across providers, so
+provider-specific billing token counts may differ. These limits apply to delivered
+reply text, not the JSON envelope, memory notes, tool results, or internal reasoning.
+
+Requests include the current conversation snapshot, sender IDs, channel, and
+retained conversation memory. Attachments are not sent to the model.
 Individual model requests have a 60-second timeout; replies using tools have a
 120-second overall deadline. Requests are cancelled during server shutdown. Failed
 model requests and sends are not retried automatically.
+
+### Conversation memory
+
+Memory is enabled automatically. Each conversation has a JSON file at
+`<configDir>/conversations/<sha256>.json`. The hash covers the adapter name,
+logged-in account, and conversation ID. For adapters without account metadata,
+the pipeline name supplies the account scope. WeChat memory survives restarts and
+pipeline reordering for the same account and conversation.
+
+Memory contains model-written notes categorized as `summary`, `fact`, `question`,
+or `inference`, plus recent replies whose delivery was confirmed by the adapter.
+Filters and repliers receive this as untrusted context alongside the latest
+30-message snapshot. The model is instructed to attribute facts to senders,
+distinguish inferences, resolve stale questions, and avoid repeating sent replies.
+
+The replier returns internal updates separately from its short outgoing message:
+
+```json
+{
+  "reply": false,
+  "text": "",
+  "memoryUpdates": {
+    "notes": [
+      {
+        "kind": "question",
+        "text": "Alice is waiting for Bob to confirm the meeting time.",
+        "sourceIds": ["message:123"]
+      }
+    ],
+    "forget": []
+  }
+}
+```
+
+Source IDs must refer to supplied snapshot messages or existing notes/replies.
+The application derives each note's expiry from the earliest cited source;
+summarizing existing notes preserves their original age. Unknown sources are
+discarded. `forget` removes existing notes that are resolved, contradicted, or
+replaced. Notes can be saved when the model declines to reply or delivery fails;
+denied snapshots do not invoke the replier. Only the application records actual
+sent replies, after successful delivery.
+
+Entries expire after **three days**. Each conversation's serialized notes and
+sent replies are capped at **1,000 tokens** in total, independently of the outgoing
+150-token soft / 200-token hard limit. Individual notes are capped at 300 tokens;
+oldest entries are evicted when the total budget is exceeded. This is compact
+context, not a raw three-day message archive: messages dropped by the snapshot
+limit before a model sees them cannot be summarized.
+
+Expired entries are removed before model use, on startup, and during hourly
+cleanup. Empty files are deleted, including those belonging to inactive
+conversations. Writes use a temporary file and atomic rename. New directories
+and files request owner-only permissions where supported. Malformed files are
+logged and preserved for inspection; their contents are excluded from prompts.
+Persistence failures are logged without turning a successfully sent reply into a
+retry. Cleanup runs while the server is running and at its next startup.
 
 ### Replier tools
 

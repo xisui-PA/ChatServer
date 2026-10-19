@@ -21,6 +21,8 @@ export interface ResponseRequest {
   toolChoice?: 'auto' | 'none';
   /** Optional system instructions. */
   instructions?: string;
+  /** Explicit reasoning effort; omitted preserves provider/model defaults. */
+  reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Extra request headers. */
   headers?: Record<string, string>;
   /** Request timeout in milliseconds. Defaults to 60 seconds. */
@@ -130,6 +132,9 @@ export async function createResponse(request: ResponseRequest): Promise<Response
     // Replay the complete output locally, including any encrypted reasoning.
     body.store = false;
     body.include = ['reasoning.encrypted_content'];
+  }
+  if (request.reasoningEffort !== undefined) {
+    body.reasoning = { effort: request.reasoningEffort };
   }
   if (request.instructions !== undefined) {
     body.instructions = request.instructions;

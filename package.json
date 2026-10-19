@@ -50,6 +50,7 @@
     "webpack-cli": "^7.2.3"
   },
   "dependencies": {
-    "htmlparser2": "^10.1.0"
+    "htmlparser2": "^10.1.0",
+    "js-tiktoken": "^1.0.21"
   }
 }

@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { AllowAllFilter } from './allow-all';
 import { IgnoreFile } from './ignore-file';
 import { IgnoreSenderFilter } from './ignore-sender';
 import { FilterAdapter } from './interface';
@@ -103,8 +102,6 @@ function stringOption(
   }
   return value;
 }
-
-registerFilter('allow-all', () => new AllowAllFilter());
 
 const createIgnoreFilter: FilterFactory = (options, context) => {
   const label = `filter "ignore-sender" (chat "${context.chatName}")`;

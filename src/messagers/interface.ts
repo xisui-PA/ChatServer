@@ -1,11 +1,23 @@
-/**
- * A message received from a transport, normalized for the server's processing pipeline.
- */
-export interface IncomingMessage {
-  /** Message text exactly as received. */
+import { ConversationMemory } from '../conversations/interface';
+
+/** One source message in a conversation, with its original author and time. */
+export interface ConversationMessage {
+  /** Stable ID used by memory notes to cite this source message. */
+  id?: string;
+  /** Message text. */
   text: string;
   /** Adapter-specific identifier for the sender (connection, user, etc.). */
   senderId: string;
+  /** Original timestamp, when supplied by the adapter. */
+  timestamp?: string;
+}
+
+/** A message or conversation snapshot normalized for the processing pipeline. */
+export interface IncomingMessage extends ConversationMessage {
+  /** Individual source messages, in order, for bundles and conversation snapshots. */
+  messages?: readonly ConversationMessage[];
+  /** Pruned, persistent conversation notes and confirmed sent replies. */
+  memory?: ConversationMemory;
   /** Optional channel or room the message belongs to. */
   channel?: string;
   /** Adapter-specific metadata, e.g. the remote IP address. */
@@ -50,7 +62,11 @@ export interface MessagerAdapter {
    * Delivers a reply that corresponds to an inbound message.
    * Implementations decide how to route it (e.g. broadcast or direct reply).
    */
-  reply(message: IncomingMessage, reply: OutgoingMessage): void | Promise<void>;
+  reply(
+    message: IncomingMessage,
+    reply: OutgoingMessage,
+    signal?: AbortSignal
+  ): void | Promise<void>;
   /** Releases transport resources. Called when the server closes. */
   stop?(): void | Promise<void>;
 }

@@ -1,9 +1,15 @@
 import { getModelApiKey } from './credentials';
 import { findProvider, loadModels } from './model-store';
 import { parseModelReference } from './reference';
-import { createResponse, ResponseItem } from './responses-client';
+import { createResponse, ResponseItem, ResponseRequest } from './responses-client';
 import { Tool } from '../tools/interface';
 import { ToolRunner } from '../tools/runner';
+
+/** Per-request generation settings; never mutate a shared model's defaults. */
+export interface GenerationOptions {
+  tools?: readonly Tool[];
+  reasoningEffort?: ResponseRequest['reasoningEffort'];
+}
 
 /** A configured model that accepts a prompt and returns text. */
 export interface TextModel {
@@ -11,7 +17,7 @@ export interface TextModel {
     input: string,
     instructions: string,
     signal?: AbortSignal,
-    tools?: readonly Tool[]
+    options?: GenerationOptions
   ): Promise<string>;
 }
 
@@ -27,8 +33,9 @@ class ProviderModel implements TextModel {
     input: string,
     instructions: string,
     signal?: AbortSignal,
-    tools: readonly Tool[] = []
+    options: GenerationOptions = {}
   ): Promise<string> {
+    const tools = options.tools ?? [];
     if (tools.length === 0) {
       const result = await createResponse({
         baseUrl: this.baseUrl,
@@ -36,6 +43,7 @@ class ProviderModel implements TextModel {
         apiKey: this.apiKey,
         input,
         instructions,
+        reasoningEffort: options.reasoningEffort,
         signal
       });
       return result.outputText;
@@ -48,7 +56,7 @@ class ProviderModel implements TextModel {
     }
     const timer = setTimeout(cancel, 120_000);
     try {
-      return await this.generateWithTools(input, instructions, tools, controller.signal);
+      return await this.generateWithTools(input, instructions, tools, controller.signal, options.reasoningEffort);
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);
@@ -60,7 +68,8 @@ class ProviderModel implements TextModel {
     input: string,
     instructions: string,
     tools: readonly Tool[],
-    signal: AbortSignal
+    signal: AbortSignal,
+    reasoningEffort: ResponseRequest['reasoningEffort']
   ): Promise<string> {
     const runner = new ToolRunner(tools);
     const history: ResponseItem[] = [{ role: 'user', content: input }];
@@ -76,6 +85,7 @@ class ProviderModel implements TextModel {
         apiKey: this.apiKey,
         input: history,
         instructions,
+        reasoningEffort,
         signal,
         tools: tools.map((tool) => tool.definition),
         toolChoice: usedCalls >= maxCalls ? 'none' : 'auto'
