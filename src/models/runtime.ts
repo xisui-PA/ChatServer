@@ -6,6 +6,8 @@ import { Tool } from '../tools/interface';
 import { ToolRunner } from '../tools/runner';
 import { assertInputBudget, boundedText, modelInputTokens, MODEL_INPUT_TOKENS, TOOL_RESULT_TOKENS } from './input-budget';
 import { withModelRetries } from './retry';
+import { AudioFile } from '../messagers/interface';
+import { createTranscription, TranscriptionModel } from './transcriptions-client';
 
 /** Per-request generation settings; never mutate a shared model's defaults. */
 export interface GenerationOptions {
@@ -24,13 +26,20 @@ export interface TextModel {
 }
 
 /** A model bound to its provider endpoint and credential. */
-class ProviderModel implements TextModel {
+class ProviderModel implements TextModel, TranscriptionModel {
   public constructor(
     private readonly baseUrl: string,
     private readonly modelId: string,
     private readonly apiKey: string,
     private readonly timeoutMs: number
   ) {}
+
+  public transcribe(audio: AudioFile, signal?: AbortSignal): Promise<string> {
+    return withModelRetries(() => createTranscription({
+      baseUrl: this.baseUrl, model: this.modelId, apiKey: this.apiKey,
+      audio, timeoutMs: this.timeoutMs, signal
+    }), signal);
+  }
 
   public async generate(
     input: string | readonly ResponseItem[],
@@ -164,7 +173,7 @@ class ProviderModel implements TextModel {
 
 /** Resolves configured model IDs and credentials once, before transports start. */
 export class ModelRegistry {
-  private readonly models = new Map<string, TextModel>();
+  private readonly models = new Map<string, ProviderModel>();
 
   public static async load(
     configDir: string,
@@ -201,6 +210,14 @@ export class ModelRegistry {
     const model = this.models.get(reference);
     if (model === undefined) {
       throw new Error(`Model "${reference}" has not been loaded.`);
+    }
+    return model;
+  }
+
+  public getTranscriber(reference: string): TranscriptionModel {
+    const model = this.models.get(reference);
+    if (model === undefined) {
+      throw new Error(`STT model "${reference}" has not been loaded.`);
     }
     return model;
   }

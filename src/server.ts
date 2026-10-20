@@ -11,8 +11,9 @@ import { ModelRegistry } from './models/runtime';
 import { createTools } from './tools/registry';
 import { ConversationMemoryStore, MEMORY_RETENTION_MS, MEMORY_TOKEN_LIMIT } from './conversations/memory-store';
 import { limitReplyText } from './repliers/limits';
-import { PendingImagesError } from './models/conversation-input';
 import { ResponsesApiError } from './models/responses-client';
+import { PendingMediaError } from './models/pending-media';
+import { VoiceTranscriber } from './models/voice-transcriber';
 
 export * from './filters/interface';
 export * from './filters/ignore-file';
@@ -38,6 +39,7 @@ interface ResolvedChat {
   filters: readonly FilterAdapter[];
   replier: Replier;
   replierModel: string;
+  stt?: VoiceTranscriber;
 }
 
 /** Bounded context since the last successful reply, plus scheduling state. */
@@ -117,6 +119,7 @@ export class ChatServer {
         mainAccount: definition.messager.mainAccount,
         replier: new ModelReplier(models.get(definition.messager.replyer), createTools(definition.messager.tools)),
         replierModel: definition.messager.replyer,
+        stt: definition.stt === undefined ? undefined : new VoiceTranscriber(models.getTranscriber(definition.stt), definition.stt),
         messager: createMessager(definition.messager.name, definition.messager.options ?? {}, {
           chatName: name,
           configDir: this.configDir,
@@ -142,6 +145,7 @@ export class ChatServer {
       await this.memory.start();
       const references = this.options.chats.flatMap((chat) => [
         chat.messager.replyer,
+        ...(chat.stt === undefined ? [] : [chat.stt]),
         ...chat.filters.flatMap((filter) => filter.model === undefined ? [] : [filter.model])
       ]);
       const models = await ModelRegistry.load(this.configDir, references);
@@ -210,6 +214,13 @@ export class ChatServer {
       // Let the normal worker fail closed, report the error, and decide about retries.
       this.enqueueMessage(chat, message);
       return;
+    }
+    if (chat.stt === undefined) {
+      const count = selected.filter((source) => source.audio !== undefined).length;
+      if (count > 0) {
+        console.log(`[chat:${chat.name}] skipped ${count} voice message(s) in ${message.channel ?? message.senderId}: no STT model configured`);
+        selected = selected.filter((source) => source.audio === undefined);
+      }
     }
     const retained = new Set(selected);
     const messages = sources.filter((source) => source.text.trim() === '/status' || retained.has(source));
@@ -293,6 +304,7 @@ export class ChatServer {
           senderId: source.senderId,
           isSelf: source.isSelf === true,
           images: source.images,
+          audio: source.audio,
           timestamp: source.timestamp && Number.isFinite(Date.parse(source.timestamp))
             ? new Date(Math.min(Date.now(), Date.parse(source.timestamp))).toISOString()
             : new Date().toISOString()
@@ -370,6 +382,11 @@ export class ChatServer {
           }
           const retained = new Set(messages);
           conversation.messages = conversation.messages.filter((entry) => entry.revision > revision || retained.has(entry.message));
+          if (conversation.chat.stt !== undefined) {
+            messages = await conversation.chat.stt.transcribe(messages, this.shutdown.signal);
+          } else {
+            messages = messages.filter((source) => source.audio === undefined);
+          }
           const latestIncoming = [...messages].reverse().find((source) => !source.isSelf);
           if (latestIncoming === undefined) {
             continue;
@@ -390,12 +407,12 @@ export class ChatServer {
       } catch (error) {
         if (!this.closed && !(error instanceof SupersededTurnError)) {
           this.processingFailures += 1;
-          this.lastProcessingError = error instanceof PendingImagesError ? 'image pending' :
+          this.lastProcessingError = error instanceof PendingMediaError ? 'media pending' :
             error instanceof ResponsesApiError ? `model request failed${error.status === undefined ? '' : ` (HTTP ${error.status})`}` :
               'processing/filter error (see server log)';
           this.lastProcessingErrorAt = new Date().toISOString();
           console.error(`[chat:${conversation.chat.name}] failed to process conversation:`, error);
-          if (error instanceof PendingImagesError && !conversation.hasPendingMessages) {
+          if (error instanceof PendingMediaError && !conversation.hasPendingMessages) {
             this.scheduleRetry(key, conversation);
           }
         }
@@ -457,7 +474,7 @@ export class ChatServer {
     if (chat.filters.length > 0) {
       const evaluation = await evaluateFilters(chat.filters, message);
       if ('error' in evaluation) {
-        if (!(evaluation.error instanceof PendingImagesError)) {
+        if (!(evaluation.error instanceof PendingMediaError)) {
           this.filterFailures += 1;
         }
         throw evaluation.error;

@@ -26,7 +26,7 @@ export interface ModelEntry {
 export interface ProviderConfig {
   /** Provider name, also the credential manager account for its API key. */
   provider: string;
-  /** Required base URL of the OpenAI-compatible API, without a trailing `/responses`. */
+  /** Required API base URL for Responses (chat) or audio/transcriptions (STT). */
   baseUrl: string;
   /** Timeout for this provider's model requests and tool cycles; defaults to 180000 ms. */
   timeoutMs?: number;

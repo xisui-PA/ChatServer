@@ -46,6 +46,12 @@
         "messager": {
           "$ref": "#/definitions/messager"
         },
+        "stt": {
+          "description": "Optional speech-to-text model as <provider>/<model id>. Its provider must support multipart audio/transcriptions. Omit to ignore incoming voice messages.",
+          "allOf": [
+            { "$ref": "#/definitions/modelReference" }
+          ]
+        },
         "filters": {
           "type": "array",
           "description": "Filters evaluated in order. Omit or use [] to delegate to the reply model without running filters.",

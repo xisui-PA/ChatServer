@@ -35,6 +35,8 @@ export interface FilterSpec {
 export interface ChatDefinition {
   /** Messager implementation receiving and sending messages. */
   messager: MessagerSpec;
+  /** Optional speech-to-text model in <provider>/<model id> format. Omit to ignore voice input. */
+  stt?: string;
   /** Filters deciding whether a message should be replied to. */
   filters: readonly FilterSpec[];
 }
@@ -238,7 +240,7 @@ function parseChat(value: unknown, index: number): ChatDefinition {
     throw new ConfigError(`${where} must be an object.`);
   }
 
-  warnUnknownKeys(value, ['messager', 'filters'], where);
+  warnUnknownKeys(value, ['messager', 'filters', 'stt'], where);
 
   const messager = parseMessagerSpec(value.messager, `${where}.messager`);
 
@@ -251,7 +253,8 @@ function parseChat(value: unknown, index: number): ChatDefinition {
     parseFilterSpec(filterValue, `${where}.filters[${filterIndex}]`)
   );
 
-  return { messager, filters };
+  const stt = value.stt === undefined ? undefined : modelReference(value.stt, `${where}.stt`);
+  return { messager, filters, stt };
 }
 
 /**

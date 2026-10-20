@@ -51,7 +51,7 @@
           "type": "string",
           "format": "uri",
           "pattern": "^https?://",
-          "description": "Required Responses-compatible API base URL, without a trailing /responses. There is no default."
+          "description": "Required API base URL: Responses-compatible for chat models, audio/transcriptions-compatible for STT models. Omit endpoint suffixes such as /responses. There is no default."
         },
         "timeoutMs": {
           "type": "integer",

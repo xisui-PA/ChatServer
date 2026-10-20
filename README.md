@@ -108,6 +108,7 @@ Each `chats` entry has a `messager` and optional `filters`:
 | `messager.tools` | Tool names; omitted enables all built-ins, `[]` disables them |
 | `messager.options` | Adapter settings below |
 | `filters` | Ordered filters; omitted or `[]` skips filtering |
+| `stt` | Optional `<provider>/<model id>` for transcribing incoming voice messages; omitted disables voice input |
 
 For editor completion and validation, add `$schema` pointing to
 [schemas/config.schema.json](schemas/config.schema.json) or
@@ -200,6 +201,36 @@ Existing provider keys are reused. For missing keys, add reads `--api-key`, then
 `--api-key`; `OPENAI_API_KEY` does not overwrite it. At runtime and in model tests,
 `CHATSERVER_MODEL_API_KEY` overrides the saved key. Keys never go in `models.json`.
 
+### Incoming voice
+
+Add a speech-to-text model using `model:add`, then set `stt` alongside `messager`
+and `filters` in the chat definition:
+
+```json
+{
+  "messager": { "name": "wechat", "replyer": "local/your-model-id" },
+  "stt": "speech-provider/your-stt-model-id",
+  "filters": []
+}
+```
+
+The STT provider must implement the [OpenAI-compatible transcription endpoint](https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create)
+(`POST <baseUrl>/audio/transcriptions`, multipart `file`/`model`, JSON `text`). It
+uses that provider's saved key, timeout, and normal model retries; it does not need
+to support the Responses API. `model:test` sends chat prompts, not audio.
+
+Voice messages are transcribed sequentially after the reply delay and sender
+exclusions, before model filters and the replier. Transcripts retain the original
+sender, timestamp, and message ID and are reused across retained snapshots. Raw
+audio is not saved in conversation memory. Replies remain text-only.
+
+Agent-wechat normally [converts received voice to MP3](https://github.com/thisnick/agent-wechat/blob/main/packages/agent-server-rust/src/tools/wechat_media.rs).
+Audio is limited to 20 MiB per message. Pending media gets bounded retries;
+unsupported audio (including raw SILK when upstream conversion fails), unavailable
+media, and recordings with no recognized speech are skipped with a log. STT
+request failures stop the turn rather than generating a reply from missing audio.
+Without `stt`, voice messages are ignored without downloads or model requests.
+
 ## Runtime behavior
 
 - **Queue:** One FIFO entry per conversation. Each turn uses messages since the last
@@ -208,8 +239,8 @@ Existing provider keys are reused. For missing keys, add reads `--api-key`, then
 - **History:** Messages from before startup, including those received while stopped,
   are skipped. Self messages provide context without triggering replies; manual
   replies arriving during generation invalidate the pending answer.
-- **Media:** Text and images are supported; voice, video, stickers, and files are
-  skipped. Up to four images per snapshot, each at most 5 MiB, are loaded lazily.
+- **Media:** Text, images, and optional STT voice input are supported; video,
+  stickers, and files are skipped. Up to four images per snapshot, each at most 5 MiB, are loaded lazily.
   Models receiving them must support image input. Pending media gets bounded
   retries; unavailable images are labeled rather than guessed.
 - **Replies:** Normally 1–2 short sentences, with a 150-token target and 200-token
