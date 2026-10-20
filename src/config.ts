@@ -29,12 +29,23 @@ export interface FilterSpec {
   options?: Readonly<Record<string, unknown>>;
 }
 
+/** Speech-to-text configuration for one chat pipeline. */
+export interface SttSpec {
+  type: 'model';
+  /** Required speech-to-text model in <provider>/<model id> format. */
+  model: string;
+  /** Optional command using {input}/{output} filenames to convert audio to WAV before upload. */
+  audioConversionCmd?: string;
+}
+
 /**
  * One chat pipeline: a messager plus the filters applied to inbound messages.
  */
 export interface ChatDefinition {
   /** Messager implementation receiving and sending messages. */
   messager: MessagerSpec;
+  /** Optional speech-to-text configuration. Omit to ignore voice input. */
+  stt?: SttSpec;
   /** Filters deciding whether a message should be replied to. */
   filters: readonly FilterSpec[];
 }
@@ -228,6 +239,23 @@ function parseFilterSpec(value: unknown, where: string): FilterSpec {
   return filter;
 }
 
+/** Validates the STT implementation, required model, and optional conversion command. */
+function parseSttSpec(value: unknown, where: string): SttSpec {
+  if (!isPlainObject(value)) {
+    throw new ConfigError(`${where} must be an object with type "model"; replace old string STT references with { "type": "model", "model": "provider/model-id" }.`);
+  }
+  warnUnknownKeys(value, ['type', 'model', 'audioConversionCmd'], where);
+  if (value.type !== 'model') {
+    throw new ConfigError(`${where}.type must be "model".`);
+  }
+  const model = modelReference(value.model, `${where}.model`);
+  if (value.audioConversionCmd !== undefined && (typeof value.audioConversionCmd !== 'string' ||
+    !value.audioConversionCmd.trim() || !value.audioConversionCmd.includes('{input}') || !value.audioConversionCmd.includes('{output}'))) {
+    throw new ConfigError(`${where}.audioConversionCmd must be a nonempty command containing {input} and {output}.`);
+  }
+  return { type: 'model', model, audioConversionCmd: (value.audioConversionCmd as string | undefined)?.trim() };
+}
+
 /**
  * Validates one entry of the `chats` array.
  */
@@ -238,7 +266,7 @@ function parseChat(value: unknown, index: number): ChatDefinition {
     throw new ConfigError(`${where} must be an object.`);
   }
 
-  warnUnknownKeys(value, ['messager', 'filters'], where);
+  warnUnknownKeys(value, ['messager', 'filters', 'stt'], where);
 
   const messager = parseMessagerSpec(value.messager, `${where}.messager`);
 
@@ -251,7 +279,8 @@ function parseChat(value: unknown, index: number): ChatDefinition {
     parseFilterSpec(filterValue, `${where}.filters[${filterIndex}]`)
   );
 
-  return { messager, filters };
+  const stt = value.stt === undefined ? undefined : parseSttSpec(value.stt, `${where}.stt`);
+  return { messager, filters, stt };
 }
 
 /**

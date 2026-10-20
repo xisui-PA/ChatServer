@@ -11,8 +11,9 @@ import { ModelRegistry } from './models/runtime';
 import { createTools } from './tools/registry';
 import { ConversationMemoryStore, MEMORY_RETENTION_MS, MEMORY_TOKEN_LIMIT } from './conversations/memory-store';
 import { limitReplyText } from './repliers/limits';
-import { PendingImagesError } from './models/conversation-input';
 import { ResponsesApiError } from './models/responses-client';
+import { PendingMediaError } from './models/pending-media';
+import { VoiceTranscriber } from './models/voice-transcriber';
 
 export * from './filters/interface';
 export * from './filters/ignore-file';
@@ -37,6 +38,8 @@ interface ResolvedChat {
   messager: MessagerAdapter;
   filters: readonly FilterAdapter[];
   replier: Replier;
+  replierModel: string;
+  stt?: VoiceTranscriber;
 }
 
 /** Bounded context since the last successful reply, plus scheduling state. */
@@ -115,6 +118,12 @@ export class ChatServer {
         name,
         mainAccount: definition.messager.mainAccount,
         replier: new ModelReplier(models.get(definition.messager.replyer), createTools(definition.messager.tools)),
+        replierModel: definition.messager.replyer,
+        stt: definition.stt === undefined ? undefined : new VoiceTranscriber(
+          models.getTranscriber(definition.stt.model),
+          definition.stt.model,
+          definition.stt.audioConversionCmd
+        ),
         messager: createMessager(definition.messager.name, definition.messager.options ?? {}, {
           chatName: name,
           configDir: this.configDir,
@@ -140,6 +149,7 @@ export class ChatServer {
       await this.memory.start();
       const references = this.options.chats.flatMap((chat) => [
         chat.messager.replyer,
+        ...(chat.stt === undefined ? [] : [chat.stt.model]),
         ...chat.filters.flatMap((filter) => filter.model === undefined ? [] : [filter.model])
       ]);
       const models = await ModelRegistry.load(this.configDir, references);
@@ -203,21 +213,47 @@ export class ChatServer {
     const sources = message.messages?.length ? message.messages : [message];
     let selected = sources.filter((source) => source.text.trim() !== '/status');
     try {
-      for (const filter of chat.filters) {
-        if (filter.selectMessages !== undefined) {
-          selected = [...await filter.selectMessages(selected)];
-        }
-      }
+      selected = await this.selectMessages(chat, selected, message.channel ?? message.senderId);
     } catch {
       // Let the normal worker fail closed, report the error, and decide about retries.
       this.enqueueMessage(chat, message);
       return;
+    }
+    if (chat.stt === undefined) {
+      const count = selected.filter((source) => source.audio !== undefined).length;
+      if (count > 0) {
+        console.log(`[chat:${chat.name}] skipped ${count} voice message(s) in ${message.channel ?? message.senderId}: no STT model configured`);
+        selected = selected.filter((source) => source.audio === undefined);
+      }
     }
     const retained = new Set(selected);
     const messages = sources.filter((source) => source.text.trim() === '/status' || retained.has(source));
     if (messages.length > 0) {
       this.enqueueMessage(chat, { ...message, messages });
     }
+  }
+
+  /** Logs exclusions at ingestion and when a changed ignore list prunes queued context. */
+  private async selectMessages(
+    chat: ResolvedChat,
+    messages: readonly ConversationMessage[],
+    conversationId: string
+  ): Promise<ConversationMessage[]> {
+    let selected = [...messages];
+    for (const filter of chat.filters) {
+      if (filter.selectMessages === undefined) {
+        continue;
+      }
+      const next = [...await filter.selectMessages(selected)];
+      const retained = new Set(next);
+      const excluded = selected.filter((source) => !retained.has(source));
+      if (excluded.length > 0) {
+        const senders = [...new Set(excluded.map((source) => source.senderId))].join(', ');
+        console.log(`[chat:${chat.name}] dropped ${excluded.length} message(s) in ${conversationId} from ${senders} by filter "${filter.name}"`);
+      }
+      selected = next;
+    }
+    return selected;
   }
 
   /** Updates bounded context without adding duplicate conversation entries. */
@@ -272,6 +308,7 @@ export class ChatServer {
           senderId: source.senderId,
           isSelf: source.isSelf === true,
           images: source.images,
+          audio: source.audio,
           timestamp: source.timestamp && Number.isFinite(Date.parse(source.timestamp))
             ? new Date(Math.min(Date.now(), Date.parse(source.timestamp))).toISOString()
             : new Date().toISOString()
@@ -340,18 +377,20 @@ export class ChatServer {
           const selfRevision = conversation.selfRevision;
           let messages = conversation.messages.map((entry) => entry.message);
           // Exclusions apply before all decision filters, regardless of their order.
-          for (const filter of conversation.chat.filters) {
-            if (filter.selectMessages !== undefined) {
-              try {
-                messages = [...await filter.selectMessages(messages)];
-              } catch (error) {
-                this.filterFailures += 1;
-                throw error;
-              }
-            }
+          try {
+            messages = await this.selectMessages(conversation.chat, messages,
+              conversation.latest.channel ?? conversation.latest.senderId);
+          } catch (error) {
+            this.filterFailures += 1;
+            throw error;
           }
           const retained = new Set(messages);
           conversation.messages = conversation.messages.filter((entry) => entry.revision > revision || retained.has(entry.message));
+          if (conversation.chat.stt !== undefined) {
+            messages = await conversation.chat.stt.transcribe(messages, this.shutdown.signal);
+          } else {
+            messages = messages.filter((source) => source.audio === undefined);
+          }
           const latestIncoming = [...messages].reverse().find((source) => !source.isSelf);
           if (latestIncoming === undefined) {
             continue;
@@ -372,12 +411,12 @@ export class ChatServer {
       } catch (error) {
         if (!this.closed && !(error instanceof SupersededTurnError)) {
           this.processingFailures += 1;
-          this.lastProcessingError = error instanceof PendingImagesError ? 'image pending' :
+          this.lastProcessingError = error instanceof PendingMediaError ? 'media pending' :
             error instanceof ResponsesApiError ? `model request failed${error.status === undefined ? '' : ` (HTTP ${error.status})`}` :
               'processing/filter error (see server log)';
           this.lastProcessingErrorAt = new Date().toISOString();
           console.error(`[chat:${conversation.chat.name}] failed to process conversation:`, error);
-          if (error instanceof PendingImagesError && !conversation.hasPendingMessages) {
+          if (error instanceof PendingMediaError && !conversation.hasPendingMessages) {
             this.scheduleRetry(key, conversation);
           }
         }
@@ -439,14 +478,14 @@ export class ChatServer {
     if (chat.filters.length > 0) {
       const evaluation = await evaluateFilters(chat.filters, message);
       if ('error' in evaluation) {
-        if (!(evaluation.error instanceof PendingImagesError)) {
+        if (!(evaluation.error instanceof PendingMediaError)) {
           this.filterFailures += 1;
         }
         throw evaluation.error;
       }
       if (evaluation.outcome === FilterOutcome.Denied) {
         const reason = evaluation.decidedBy ? ` by filter "${evaluation.decidedBy}"` : '';
-        console.log(`[chat:${chat.name}] dropped message from ${message.senderId}${reason}`);
+        console.log(`[chat:${chat.name}] dropped ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}${reason}`);
         return false;
       }
       outcome = evaluation.outcome;
@@ -474,7 +513,11 @@ export class ChatServer {
     if (conversation.selfRevision !== selfRevision) {
       throw new SupersededTurnError();
     }
-    if (this.closed || reply === undefined) {
+    if (this.closed) {
+      return false;
+    }
+    if (reply === undefined) {
+      console.log(`[chat:${chat.name}] skipped reply to ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}: replier "${chat.replierModel}" chose not to reply`);
       return false;
     }
     if (await this.deliverReply(chat, message, reply)) {

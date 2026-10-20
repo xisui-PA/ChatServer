@@ -1,5 +1,7 @@
-import { ImageLoadResult, IncomingMessage, MessageHandler, MessagerAdapter, MessagerStatus, OutgoingMessage } from './interface';
+import { AudioLoadResult, ImageLoadResult, IncomingMessage, MessageHandler, MessagerAdapter, MessagerStatus, OutgoingMessage } from './interface';
 import { ImageUnavailableError, imageDataUrl, MAX_ENCODED_IMAGE_BYTES } from './images';
+import { audioFile, MAX_ENCODED_AUDIO_BYTES } from './audio';
+import { MediaUnavailableError } from './media';
 
 /** Options for the outbound-only agent-wechat REST adapter. */
 export interface WechatMessagerOptions {
@@ -31,6 +33,11 @@ interface WechatMessage {
   [key: string]: unknown;
 }
 
+/** Never pass raw image/voice message XML to models as the message body. */
+function messageText(message: WechatMessage): string {
+  return message.type === 3 ? '[Image]' : message.type === 34 ? '[Voice]' : message.content;
+}
+
 /** Retains HTTP status for media retry classification without retaining response bodies. */
 class WechatRequestError extends Error {
   public constructor(public readonly status: number, endpoint: string) {
@@ -52,7 +59,7 @@ function duration(value: number | undefined, fallback: number, label: string): n
   return result;
 }
 
-/** Receives text and image references by polling agent-wechat; never listens on a port. */
+/** Receives text and lazy media references by polling agent-wechat; never listens on a port. */
 export class WechatMessagerAdapter implements MessagerAdapter {
   public readonly name = 'wechat';
   private readonly baseUrl: string;
@@ -170,6 +177,9 @@ export class WechatMessagerAdapter implements MessagerAdapter {
         MAX_ENCODED_IMAGE_BYTES + 64 * 1024
       );
     } catch (error) {
+      if (error instanceof MediaUnavailableError) {
+        throw new ImageUnavailableError(error.message);
+      }
       if (error instanceof WechatRequestError && error.status >= 400 && error.status < 500 &&
         error.status !== 408 && error.status !== 429) {
         throw new ImageUnavailableError('WeChat image media is unavailable.');
@@ -193,6 +203,39 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       return { status: 'ready', dataUrl: imageDataUrl(result.data) };
     } catch {
       return { status: 'unavailable' };
+    }
+  }
+
+  private async loadAudio(chatId: string, localId: number, account: string | undefined, signal?: AbortSignal): Promise<AudioLoadResult> {
+    this.requireAccount(account);
+    let result: unknown;
+    try {
+      result = await this.request(`/api/messages/${encodeURIComponent(chatId)}/media/${localId}`,
+        undefined, signal, MAX_ENCODED_AUDIO_BYTES + 64 * 1024);
+    } catch (error) {
+      if (error instanceof MediaUnavailableError || error instanceof WechatRequestError &&
+        error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429) {
+        return { status: 'unavailable', reason: error.message };
+      }
+      throw error;
+    }
+    this.requireAccount(account);
+    if (!isRecord(result) || typeof result.type !== 'string') {
+      throw new Error('Unexpected WeChat voice media response.');
+    }
+    if (result.type !== 'voice' || result.data === undefined || result.data === null) {
+      if (result.retryable === true || result.type === 'pending' && result.retryable !== false) {
+        return { status: 'pending' };
+      }
+      return { status: 'unavailable' };
+    }
+    if (typeof result.data !== 'string' || typeof result.format !== 'string') {
+      return { status: 'unavailable', reason: 'invalid voice media fields' };
+    }
+    try {
+      return { status: 'ready', audio: audioFile(result.data, result.format, localId) };
+    } catch (error) {
+      return { status: 'unavailable', reason: error instanceof Error ? error.message : 'invalid voice data' };
     }
   }
 
@@ -365,14 +408,14 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       const alreadySeen = timestamp < cursor.timestamp ||
         (timestamp === cursor.timestamp && cursor.ids.has(message.localId));
       if (!alreadySeen && message.isSelf === true &&
-        ((message.type === 1 && message.content) || message.type === 3)) {
+        ((message.type === 1 && message.content) || message.type === 3 || message.type === 34)) {
         flush();
         this.dispatchBundle(chatId, [message]);
         this.advanceCursor(cursor, message);
         continue;
       }
       const eligible = message.isSelf === false && message.sender &&
-        ((message.type === 1 && message.content) || message.type === 3);
+        ((message.type === 1 && message.content) || message.type === 3 || message.type === 34);
       if (alreadySeen || !eligible) {
         // Even messages we don't deliver interrupt conversational adjacency.
         flush();
@@ -402,7 +445,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       return;
     }
     const account = this.account;
-    const text = messages.map((message) => message.type === 3 ? '[Image]' : message.content).join('\n');
+    const text = messages.map(messageText).join('\n');
     this.handler?.({
       text,
       senderId: sender,
@@ -411,14 +454,18 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       channel: chatId,
       messages: messages.map((message) => ({
         id: `message:${message.localId}`,
-        text: message.type === 3 ? '[Image]' : message.content,
+        text: messageText(message),
         senderId: message.isSelf ? account as string : message.sender as string,
         isSelf: message.isSelf === true,
         timestamp: message.timestamp,
         images: message.type === 3 ? [{
           id: `image:${message.localId}`,
           load: (signal?: AbortSignal) => this.loadImage(chatId, message.localId, account, signal)
-        }] : undefined
+        }] : undefined,
+        audio: message.type === 34 ? {
+          id: `voice:${message.localId}`,
+          load: (signal?: AbortSignal) => this.loadAudio(chatId, message.localId, account, signal)
+        } : undefined
       })),
       metadata: {
         ...last,
@@ -468,10 +515,10 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       }
       if (Number(response.headers.get('content-length')) > maxBytes) {
         controller.abort();
-        throw new ImageUnavailableError('WeChat image media response exceeds the size limit.');
+        throw new MediaUnavailableError('WeChat media response exceeds the size limit.');
       }
       if (response.body === null) {
-        throw new Error('WeChat image media response has no body.');
+        throw new Error('WeChat media response has no body.');
       }
       const reader = response.body.getReader();
       const chunks: Uint8Array[] = [];
@@ -485,7 +532,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
           size += chunk.value.byteLength;
           if (size > maxBytes) {
             controller.abort();
-            throw new ImageUnavailableError('WeChat image media response exceeds the size limit.');
+            throw new MediaUnavailableError('WeChat media response exceeds the size limit.');
           }
           chunks.push(chunk.value);
         }

@@ -12,6 +12,24 @@ export interface IncomingImage {
   load(signal?: AbortSignal): Promise<string | ImageLoadResult | undefined>;
 }
 
+/** Decoded audio for a multipart transcription request; never stored in conversation memory. */
+export interface AudioFile {
+  data: Uint8Array;
+  filename: string;
+  mimeType: string;
+}
+
+export type AudioLoadResult =
+  | { status: 'ready'; audio: AudioFile }
+  | { status: 'pending' }
+  | { status: 'unavailable'; reason?: string };
+
+/** A voice message whose media is fetched only when processing its conversation. */
+export interface IncomingAudio {
+  id: string;
+  load(signal?: AbortSignal): Promise<AudioLoadResult>;
+}
+
 /** One source message in a conversation, with its original author and time. */
 export interface ConversationMessage {
   /** Stable ID used by memory notes to cite this source message. */
@@ -26,6 +44,8 @@ export interface ConversationMessage {
   timestamp?: string;
   /** Images belonging to this source message, loaded only for model processing. */
   images?: readonly IncomingImage[];
+  /** Optional voice input, transcribed before model filters and replies. */
+  audio?: IncomingAudio;
 }
 
 /** A message or conversation snapshot normalized for the processing pipeline. */

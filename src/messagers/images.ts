@@ -1,9 +1,11 @@
+import { MediaUnavailableError } from './media';
+
 /** Bounds decoded image data before it can enter a model request. */
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 export const MAX_ENCODED_IMAGE_BYTES = 4 * Math.ceil(MAX_IMAGE_BYTES / 3);
 
 /** A terminal media failure that should not be retried. */
-export class ImageUnavailableError extends Error {}
+export class ImageUnavailableError extends MediaUnavailableError {}
 
 /** Accepts actual image bytes, independently of the transport's declared format. */
 export function imageDataUrl(data: string): string {

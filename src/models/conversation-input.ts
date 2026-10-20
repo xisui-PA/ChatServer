@@ -3,12 +3,13 @@ import { ImageUnavailableError } from '../messagers/images';
 import { ResponseItem } from './responses-client';
 import { boundedText, CONVERSATION_TEXT_TOKENS } from './input-budget';
 import { countTokens } from './tokens';
+import { PendingMediaError } from './pending-media';
 
 export const MAX_IMAGES_PER_SNAPSHOT = 4;
 const MAX_MEDIA_ATTEMPTS = 3;
 
 /** Defers this snapshot before any model request or delivery. */
-export class PendingImagesError extends Error {
+export class PendingImagesError extends PendingMediaError {
   public constructor() {
     super('Image media is pending; waiting for a later turn.');
   }

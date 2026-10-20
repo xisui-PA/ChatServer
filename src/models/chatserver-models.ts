@@ -12,7 +12,7 @@ const COMMANDS = ['add', 'test', 'list', 'update', 'remove'];
  */
 const HELP_TEXT = `Usage: chatserver-models <command> [options]
 
-Manage OpenAI Responses API compatible providers and models. Provider details live in
+Manage OpenAI-compatible chat and speech-to-text models. Provider details live in
 <config_dir>/models.json; each provider's API key lives in the OS credential manager
 under the provider name.
 

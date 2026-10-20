@@ -46,6 +46,9 @@
         "messager": {
           "$ref": "#/definitions/messager"
         },
+        "stt": {
+          "$ref": "#/definitions/stt"
+        },
         "filters": {
           "type": "array",
           "description": "Filters evaluated in order. Omit or use [] to delegate to the reply model without running filters.",
@@ -53,6 +56,25 @@
           "items": {
             "$ref": "#/definitions/filter"
           }
+        }
+      }
+    },
+    "stt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "model"],
+      "description": "Optional speech-to-text settings. Omit the entire object to ignore voice input.",
+      "properties": {
+        "type": { "const": "model" },
+        "model": {
+          "description": "Required <provider>/<model id> for audio/transcriptions. There is no fallback to messager.replyer.",
+          "allOf": [{ "$ref": "#/definitions/modelReference" }]
+        },
+        "audioConversionCmd": {
+          "type": "string",
+          "pattern": "^(?=[\\s\\S]*\\{input\\})(?=[\\s\\S]*\\{output\\})[\\s\\S]+$",
+          "description": "Optional shell command converting {input} to {output} as WAV. Runs in an isolated temporary directory; converter must be installed on the ChatServer machine. Without it, original audio is uploaded.",
+          "examples": ["ffmpeg -nostdin -y -i {input} -ar 16000 -ac 1 -c:a pcm_s16le {output}"]
         }
       }
     },
