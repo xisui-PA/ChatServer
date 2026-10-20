@@ -1,0 +1,55 @@
+const path = require('path');
+const webpack = require('webpack');
+
+/**
+ * @param {Record<string, unknown>} env
+ * @param {{ mode?: 'development' | 'production' }} argv
+ * @returns {import('webpack').Configuration}
+ */
+module.exports = (env, argv) => {
+  const mode = argv.mode === 'development' ? 'development' : 'production';
+
+  return {
+    mode,
+    target: 'node',
+    entry: {
+      index: './src/index.ts',
+      'models/chatserver-models': './src/models/chatserver-models.ts',
+    },
+    plugins: [
+      // Make each entry directly executable so they can be used as npm `bin` scripts.
+      new webpack.BannerPlugin({ banner: '#!/usr/bin/env node', raw: true, entryOnly: true }),
+    ],
+    devtool: 'source-map',
+    output: {
+      path: path.resolve(__dirname, 'dist'),
+      filename: '[name].js',
+      // Emit relative source paths so VS Code can map breakpoints back to src/.
+      devtoolNamespace: '',
+      // Remove stale files from previous builds.
+      clean: true,
+    },
+    resolve: {
+      extensions: ['.ts', '.js'],
+    },
+    module: {
+      rules: [
+        {
+          test: /\.ts$/,
+          exclude: /node_modules/,
+          use: {
+            loader: 'ts-loader',
+            options: {
+              configFile: 'tsconfig.json',
+            },
+          },
+        },
+      ],
+    },
+    optimization: {
+      // Keep the server bundle readable and fast to build.
+      minimize: false,
+    },
+    stats: 'errors-warnings',
+  };
+};

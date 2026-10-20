@@ -1,0 +1,244 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ChatServer configuration",
+  "description": "config.json for the built-in chat pipelines. Custom registered adapters and tools require extending this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Location of this JSON schema for editor validation and completion."
+    },
+    "chats": {
+      "type": "array",
+      "description": "Chat pipelines served by this process. An empty array runs no adapters.",
+      "default": [],
+      "items": {
+        "$ref": "#/definitions/chat"
+      }
+    }
+  },
+  "definitions": {
+    "nonEmptyString": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "modelReference": {
+      "type": "string",
+      "pattern": "^[^\\s/](?:[^/]*[^\\s/])?/\\S(?:[\\s\\S]*\\S)?$",
+      "description": "<provider>/<model id>, using the provider name and model ID from models.json. Model IDs may contain additional slashes.",
+      "examples": [
+        "my-provider/my-model-id"
+      ]
+    },
+    "duration": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "chat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "messager"
+      ],
+      "properties": {
+        "messager": {
+          "$ref": "#/definitions/messager"
+        },
+        "filters": {
+          "type": "array",
+          "description": "Filters evaluated in order. Omit or use [] to delegate to the reply model without running filters.",
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/filter"
+          }
+        }
+      }
+    },
+    "messager": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "replyer"
+      ],
+      "properties": {
+        "name": {
+          "const": "wechat",
+          "description": "Registered transport. WeChat is the built-in implementation."
+        },
+        "replyer": {
+          "$ref": "#/definitions/modelReference"
+        },
+        "mainAccount": {
+          "description": "Exact sender ID authorized to use /status in a direct chat; usually wxid_..., not a display name.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/nonEmptyString"
+            }
+          ]
+        },
+        "tools": {
+          "type": "array",
+          "description": "Application-managed replier tools. Omit to enable all four; [] disables tools. Duplicate entries are deduplicated.",
+          "default": [
+            "web_search",
+            "read_url",
+            "calculate",
+            "current_time"
+          ],
+          "items": {
+            "enum": [
+              "web_search",
+              "read_url",
+              "calculate",
+              "current_time"
+            ]
+          }
+        },
+        "options": {
+          "$ref": "#/definitions/wechatOptions"
+        }
+      }
+    },
+    "wechatOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://[^/?#@\\s]+(?:/[^?#\\s]*)?$",
+          "description": "agent-wechat HTTP(S) server root, without credentials, query, or fragment.",
+          "default": "http://127.0.0.1:6174"
+        },
+        "tokenEnv": {
+          "description": "Environment variable containing the bearer token; takes precedence over tokenFile.",
+          "default": "AGENT_WECHAT_TOKEN",
+          "allOf": [
+            {
+              "$ref": "#/definitions/nonEmptyString"
+            }
+          ]
+        },
+        "tokenFile": {
+          "description": "Fallback bearer-token file. Relative paths resolve against the config directory; expand ~ yourself.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/nonEmptyString"
+            }
+          ]
+        },
+        "chatIds": {
+          "type": "array",
+          "description": "Chat IDs to monitor. Omit to monitor all chats; mainAccount is always included when configured.",
+          "items": {
+            "$ref": "#/definitions/nonEmptyString"
+          }
+        },
+        "pollIntervalMs": {
+          "description": "Delay after a completed poll, in milliseconds. Failed polls use exponential backoff.",
+          "default": 30000,
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ]
+        },
+        "timeoutMs": {
+          "description": "Timeout for each WeChat REST request in milliseconds; independent of model timeouts.",
+          "default": 30000,
+          "allOf": [
+            {
+              "$ref": "#/definitions/duration"
+            }
+          ]
+        },
+        "bundleGapMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483647,
+          "description": "Maximum timestamp gap between adjacent messages from the same sender, in milliseconds. Zero disables bundling.",
+          "default": 10000
+        }
+      }
+    },
+    "filter": {
+      "oneOf": [
+        {
+          "enum": [
+            "ignore",
+            "ignore-sender"
+          ],
+          "description": "Shorthand ignore filter using the default <messager>_ignore file."
+        },
+        {
+          "$ref": "#/definitions/ignoreFilter"
+        },
+        {
+          "$ref": "#/definitions/modelFilter"
+        }
+      ]
+    },
+    "ignoreFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "ignore",
+            "ignore-sender"
+          ]
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "file": {
+              "type": "string",
+              "description": "Ignore-list file; defaults to <messager>_ignore in the config directory. Relative paths resolve against that directory."
+            },
+            "senderIds": {
+              "type": "array",
+              "description": "Inline sender IDs combined with the file's IDs. Ignored messages are excluded before buffering and model processing.",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "modelFilter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "model"
+      ],
+      "properties": {
+        "type": {
+          "const": "model"
+        },
+        "model": {
+          "$ref": "#/definitions/modelReference"
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "instructions": {
+              "type": "string",
+              "description": "Decision criteria for the filter model. Thinking is disabled for filter calls.",
+              "default": "Allow messages that would benefit from an assistant response. Otherwise abstain."
+            }
+          }
+        }
+      }
+    }
+  }
+}
