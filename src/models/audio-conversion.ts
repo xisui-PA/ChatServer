@@ -1,9 +1,16 @@
+import {
+  AUDIO_CLEANUP_RETRIES,
+  AUDIO_CLEANUP_RETRY_DELAY_MS,
+  AUDIO_CONVERSION_STDERR_CHARS,
+  AUDIO_CONVERSION_TIMEOUT_MS,
+  MAX_AUDIO_BYTES,
+  MAX_TIMER_MS
+} from '../limit';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { AudioFile } from '../messagers/interface';
-import { MAX_AUDIO_BYTES } from '../messagers/audio';
 
 /** Runs a configured command with bounded diagnostics, cancellation, and a process-tree deadline. */
 async function runConversion(command: string, directory: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
@@ -53,7 +60,7 @@ async function runConversion(command: string, directory: string, timeoutMs: numb
     const timer = setTimeout(() => stop(new Error(`Audio conversion timed out after ${timeoutMs} ms.`)), timeoutMs);
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', (chunk: string) => {
-      stderr = (stderr + chunk).slice(0, 8_192);
+      stderr = (stderr + chunk).slice(0, AUDIO_CONVERSION_STDERR_CHARS);
     });
     child.on('error', () => finish(new Error('Unable to start audioConversionCmd. Check the command and installed converter.')));
     child.on('close', (code) => finish(code === 0 ? undefined :
@@ -70,17 +77,17 @@ export async function convertAudio(
   audio: AudioFile,
   command: string,
   signal?: AbortSignal,
-  timeoutMs = 30_000
+  timeoutMs = AUDIO_CONVERSION_TIMEOUT_MS
 ): Promise<AudioFile> {
   signal?.throwIfAborted();
-  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
-    throw new Error('Audio conversion timeout must be a positive integer up to 2147483647.');
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > MAX_TIMER_MS) {
+    throw new Error(`Audio conversion timeout must be a positive integer up to ${MAX_TIMER_MS}.`);
   }
   if (!command.includes('{input}') || !command.includes('{output}')) {
     throw new Error('audioConversionCmd must contain {input} and {output} placeholders.');
   }
   if (!audio.data.byteLength || audio.data.byteLength > MAX_AUDIO_BYTES) {
-    throw new Error('Audio conversion input must be nonempty and no larger than 20 MiB.');
+    throw new Error(`Audio conversion input must be nonempty and no larger than ${MAX_AUDIO_BYTES / (1024 * 1024)} MiB.`);
   }
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'chatserver-audio-'));
   const extension = path.extname(audio.filename);
@@ -100,7 +107,7 @@ export async function convertAudio(
       throw new Error('audioConversionCmd did not create its {output} WAV file.');
     }
     if (!stat.isFile() || stat.size < 44 || stat.size > MAX_AUDIO_BYTES) {
-      throw new Error('Converted audio must be a nonempty WAV file no larger than 20 MiB.');
+      throw new Error(`Converted audio must be a nonempty WAV file no larger than ${MAX_AUDIO_BYTES / (1024 * 1024)} MiB.`);
     }
     const data = await fs.readFile(outputPath);
     if (data.subarray(0, 4).toString('ascii') !== 'RIFF' || data.subarray(8, 12).toString('ascii') !== 'WAVE') {
@@ -108,6 +115,6 @@ export async function convertAudio(
     }
     return { data, mimeType: 'audio/wav', filename: `${path.basename(audio.filename, extension) || 'voice'}.wav` };
   } finally {
-    await fs.rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    await fs.rm(directory, { recursive: true, force: true, maxRetries: AUDIO_CLEANUP_RETRIES, retryDelay: AUDIO_CLEANUP_RETRY_DELAY_MS });
   }
 }

@@ -1,3 +1,9 @@
+import {
+  MAX_SEARCH_QUERY_CHARS,
+  MAX_SEARCH_RESULTS,
+  MAX_SEARCH_SNIPPET_CHARS,
+  MAX_SEARCH_TITLE_CHARS
+} from '../limit';
 import { parseDocument } from 'htmlparser2';
 import { HtmlNode, htmlText, walkHtml } from './html';
 import { readPublicPage, publicUrl } from './http';
@@ -56,12 +62,12 @@ export class DuckDuckGoSearchProvider implements WebSearchProvider {
       let snippet = '';
       for (const candidate of walkHtml(row)) {
         if (hasClass(candidate, 'result__snippet')) {
-          snippet = htmlText(candidate, 1000);
+          snippet = htmlText(candidate, MAX_SEARCH_SNIPPET_CHARS);
           break;
         }
       }
-      results.push({ title: htmlText(node, 300), url: url.toString(), snippet });
-      if (results.length === 5) {
+      results.push({ title: htmlText(node, MAX_SEARCH_TITLE_CHARS), url: url.toString(), snippet });
+      if (results.length === MAX_SEARCH_RESULTS) {
         break;
       }
     }
@@ -76,7 +82,7 @@ export class WebSearchTool implements Tool {
   public readonly definition: ToolDefinition = {
     type: 'function',
     name: 'web_search',
-    description: 'Search the public web for current information. Returns up to 5 titles, URLs, and snippets. Use read_url to verify sources. Include citations only when the user explicitly asks for them.',
+    description: `Search the public web for current information. Returns up to ${MAX_SEARCH_RESULTS} titles, URLs, and snippets. Use read_url to verify sources. Include citations only when the user explicitly asks for them.`,
     parameters: {
       type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false
     },
@@ -87,7 +93,7 @@ export class WebSearchTool implements Tool {
 
   public async execute(args: unknown, signal?: AbortSignal): Promise<unknown> {
     const values = toolArguments(args, ['query']);
-    const query = stringArgument(values, 'query', 500);
+    const query = stringArgument(values, 'query', MAX_SEARCH_QUERY_CHARS);
     return { provider: this.provider.name, query, results: await this.provider.search(query, signal) };
   }
 }

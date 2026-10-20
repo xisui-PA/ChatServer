@@ -1,10 +1,11 @@
+import { MAX_MODEL_TOOL_CALLS, MODEL_INPUT_TOKENS, TOOL_RESULT_TOKENS } from '../limit';
 import { getModelApiKey } from './credentials';
 import { findProvider, loadModels } from './model-store';
 import { parseModelReference } from './reference';
 import { createResponse, ResponseItem, ResponseRequest, ResponsesApiError, resolveModelTimeoutMs } from './responses-client';
 import { Tool } from '../tools/interface';
 import { ToolRunner } from '../tools/runner';
-import { assertInputBudget, boundedText, modelInputTokens, MODEL_INPUT_TOKENS, TOOL_RESULT_TOKENS } from './input-budget';
+import { assertInputBudget, boundedText, modelInputTokens } from './input-budget';
 import { withModelRetries } from './retry';
 import { AudioFile } from '../messagers/interface';
 import { createTranscription, TranscriptionModel } from './transcriptions-client';
@@ -106,11 +107,10 @@ class ProviderModel implements TextModel, TranscriptionModel {
       ? [{ role: 'user', content: input }] : [...input];
     const turns: ResponseItem[][] = [];
     const definitions = tools.map((tool) => tool.definition);
-    const maxCalls = 8;
     let usedCalls = 0;
     const callIds = new Set<string>();
-    // At most eight tool-producing rounds, followed by one tool-free final answer.
-    for (let round = 0; round <= maxCalls; round += 1) {
+    // Tool-producing rounds share the call budget; one final tool-free answer follows.
+    for (let round = 0; round <= MAX_MODEL_TOOL_CALLS; round += 1) {
       signal.throwIfAborted();
       let history = [...initial, ...turns.flat()];
       // Remove entire completed rounds, keeping calls paired with their results.
@@ -121,7 +121,7 @@ class ProviderModel implements TextModel, TranscriptionModel {
       if (modelInputTokens(history, instructions, definitions) > MODEL_INPUT_TOKENS) {
         turns.length = 0;
         history = [...initial, { role: 'user', content: 'Tool history exceeded the input budget. Answer from the conversation and report that the tool results could not be retained.' }];
-        usedCalls = maxCalls;
+        usedCalls = MAX_MODEL_TOOL_CALLS;
       }
       assertInputBudget(history, instructions, definitions);
       const result = await createResponse({
@@ -134,7 +134,7 @@ class ProviderModel implements TextModel, TranscriptionModel {
         timeoutMs: this.timeoutMs,
         signal,
         tools: definitions,
-        toolChoice: usedCalls >= maxCalls ? 'none' : 'auto'
+        toolChoice: usedCalls >= MAX_MODEL_TOOL_CALLS ? 'none' : 'auto'
       });
       const raw = result.raw;
       if (typeof raw !== 'object' || raw === null || !('output' in raw) || !Array.isArray(raw.output) ||
@@ -149,7 +149,7 @@ class ProviderModel implements TextModel, TranscriptionModel {
         }
         return result.outputText;
       }
-      if (usedCalls >= maxCalls) {
+      if (usedCalls >= MAX_MODEL_TOOL_CALLS) {
         throw new Error('Model continued calling tools after the tool budget was exhausted.');
       }
       const turn = [...output];
@@ -159,7 +159,7 @@ class ProviderModel implements TextModel, TranscriptionModel {
           throw new Error('Model returned a malformed or duplicate function call.');
         }
         callIds.add(call.call_id);
-        const toolOutput = usedCalls < maxCalls
+        const toolOutput = usedCalls < MAX_MODEL_TOOL_CALLS
           ? await runner.execute(call.name, call.arguments, signal)
           : JSON.stringify({ ok: false, error: 'Tool budget exhausted; answer using existing results.' });
         usedCalls += 1;

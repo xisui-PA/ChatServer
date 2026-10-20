@@ -1,8 +1,6 @@
+import { MAX_AUDIO_BYTES, MAX_ENCODED_AUDIO_BYTES } from '../limit';
 import { AudioFile } from './interface';
 import { MediaUnavailableError } from './media';
-
-export const MAX_AUDIO_BYTES = 20 * 1024 * 1024;
-export const MAX_ENCODED_AUDIO_BYTES = 4 * Math.ceil(MAX_AUDIO_BYTES / 3);
 
 const formats: Record<string, string> = {
   mp3: 'audio/mpeg', mpeg: 'audio/mpeg', mpga: 'audio/mpeg',
@@ -18,7 +16,7 @@ export function audioFile(data: string, format: string, id: number): AudioFile {
     throw new MediaUnavailableError(`Unsupported voice format "${format}"; agent-wechat must convert SILK to MP3.`);
   }
   if (!data || data.length > MAX_ENCODED_AUDIO_BYTES || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
-    throw new MediaUnavailableError('Voice data must be valid base64 no larger than 20 MiB.');
+    throw new MediaUnavailableError(`Voice data must be valid base64 no larger than ${MAX_AUDIO_BYTES / (1024 * 1024)} MiB.`);
   }
   const bytes = Buffer.from(data, 'base64');
   if (bytes.length > MAX_AUDIO_BYTES || bytes.toString('base64') !== data ||

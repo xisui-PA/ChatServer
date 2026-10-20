@@ -1,5 +1,5 @@
+import { MAX_AUDIO_BYTES, MAX_TRANSCRIPT_CHARS } from '../limit';
 import { AudioFile } from '../messagers/interface';
-import { MAX_AUDIO_BYTES } from '../messagers/audio';
 import { ResponsesApiError, resolveModelTimeoutMs } from './responses-client';
 
 /** A provider-bound speech-to-text model, independent of text-generation capabilities. */
@@ -20,7 +20,7 @@ interface TranscriptionRequest {
 export async function createTranscription(request: TranscriptionRequest): Promise<string> {
   request.signal?.throwIfAborted();
   if (request.audio.data.byteLength === 0 || request.audio.data.byteLength > MAX_AUDIO_BYTES) {
-    throw new Error('Transcription audio must be nonempty and no larger than 20 MiB.');
+    throw new Error(`Transcription audio must be nonempty and no larger than ${MAX_AUDIO_BYTES / (1024 * 1024)} MiB.`);
   }
   const url = `${request.baseUrl.replace(/\/+$/, '')}/audio/transcriptions`;
   const timeoutMs = resolveModelTimeoutMs(request.timeoutMs);
@@ -53,8 +53,8 @@ export async function createTranscription(request: TranscriptionRequest): Promis
       throw new ResponsesApiError('Transcription model returned invalid JSON.', response.status);
     }
     if (typeof result !== 'object' || result === null || Array.isArray(result) ||
-      !('text' in result) || typeof result.text !== 'string' || result.text.length > 32_000) {
-      throw new ResponsesApiError('Transcription model must return a text string of at most 32000 characters.', response.status);
+      !('text' in result) || typeof result.text !== 'string' || result.text.length > MAX_TRANSCRIPT_CHARS) {
+      throw new ResponsesApiError(`Transcription model must return a text string of at most ${MAX_TRANSCRIPT_CHARS} characters.`, response.status);
     }
     return result.text.trim();
   } catch (error) {

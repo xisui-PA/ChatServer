@@ -1,3 +1,4 @@
+import { MAX_TIMEZONE_CHARS } from '../limit';
 import { Tool, ToolDefinition, toolArguments } from './interface';
 
 export class CurrentTimeTool implements Tool {
@@ -17,7 +18,7 @@ export class CurrentTimeTool implements Tool {
   public execute(args: unknown): Promise<unknown> {
     const values = toolArguments(args, ['timezone']);
     const timezone = values.timezone ?? 'UTC';
-    if (typeof timezone !== 'string' || !timezone.trim() || timezone.length > 100) {
+    if (typeof timezone !== 'string' || !timezone.trim() || timezone.length > MAX_TIMEZONE_CHARS) {
       throw new Error('timezone must be an IANA timezone string or null.');
     }
     const formatter = new Intl.DateTimeFormat('en-US', {

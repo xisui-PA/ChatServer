@@ -35,7 +35,7 @@ function voice(id = '1', senderId = 'sender', load = async () => ({ status: 'rea
 test('config allows omitted STT but requires a valid explicit model when STT is configured', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'chatserver-voice-config-'));
   try {
-    const chat = { messager: { name: 'wechat', replyer: 'chat/model' }, filters: [] };
+    const chat = { messager: { name: 'wechat', replier: 'chat/model' }, filters: [] };
     for (const stt of [undefined, { type: 'model', model: 'speech/org/model' },
       { type: 'model', model: 'speech/model', audioConversionCmd: 'ffmpeg -i {input} {output}' }]) {
       await fs.writeFile(path.join(dir, 'config.json'), JSON.stringify({ chats: [{ ...chat, stt }] }));
@@ -304,7 +304,7 @@ test('STT registry uses the configured provider/model and normal retry policy', 
 
 test('startup includes the optional STT model in provider resolution', async (t) => {
   quiet(t);
-  const options = { chats: [{ messager: { name: 'wechat', replyer: 'chat/model' }, stt: { type: 'model', model: 'speech/stt' }, filters: [] }] };
+  const options = { chats: [{ messager: { name: 'wechat', replier: 'chat/model' }, stt: { type: 'model', model: 'speech/stt' }, filters: [] }] };
   const server = new ChatServer(options, '/unused');
   server.memory.start = async () => {};
   server.memory.close = async () => {};

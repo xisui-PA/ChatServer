@@ -1,3 +1,4 @@
+import { DEFAULT_MODEL_TIMEOUT_MS, MAX_SETUP_CHOICES, MODEL_DISCOVERY_TIMEOUT_MS } from '../limit';
 import { CliError, CommandLine, hasFlag, optionalValue, promptLine } from './cli-support';
 import { ModelsFile, ProviderConfig } from './model-store';
 
@@ -63,7 +64,7 @@ export async function setupChoice(
   allowCustom = false
 ): Promise<string> {
   requireSetupTerminal();
-  const shown = allowCustom ? choices.slice(0, 30) : choices;
+  const shown = allowCustom ? choices.slice(0, MAX_SETUP_CHOICES) : choices;
   shown.forEach((choice, index) => console.log(`  ${index + 1}. ${choice.label}`));
   if (choices.length > shown.length) {
     console.log(`Showing ${shown.length} of ${choices.length}; enter an exact name/ID for another choice.`);
@@ -118,7 +119,7 @@ export async function setupModelId(provider: ProviderConfig, apiKey: string): Pr
   try {
     const response = await fetch(`${provider.baseUrl.replace(/\/+$/, '')}/models`, {
       headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(Math.min(provider.timeoutMs ?? 180_000, 10_000)),
+      signal: AbortSignal.timeout(Math.min(provider.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS, MODEL_DISCOVERY_TIMEOUT_MS)),
       redirect: 'error'
     });
     if (!response.ok) {

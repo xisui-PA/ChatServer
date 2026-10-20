@@ -1,11 +1,10 @@
+import { DEFAULT_MODEL_TIMEOUT_MS, MAX_TIMER_MS } from '../limit';
 import { ToolDefinition } from '../tools/interface';
-
-export const DEFAULT_MODEL_TIMEOUT_MS = 180_000;
 
 /** Validates durations against Node's timer range, including programmatic callers. */
 export function resolveModelTimeoutMs(value: unknown = DEFAULT_MODEL_TIMEOUT_MS): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) {
-    throw new Error('Model timeout must be an integer from 1 to 2147483647 milliseconds.');
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > MAX_TIMER_MS) {
+    throw new Error(`Model timeout must be an integer from 1 to ${MAX_TIMER_MS} milliseconds.`);
   }
   return value;
 }

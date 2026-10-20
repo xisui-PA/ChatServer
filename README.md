@@ -38,7 +38,7 @@ with its bearer token. WeChat login and agent-wechat setup are managed separatel
        {
          "messager": {
            "name": "wechat",
-           "replyer": "local/your-model-id",
+           "replier": "local/your-model-id",
            "tools": [],
            "options": {
              "baseUrl": "http://127.0.0.1:6174",
@@ -51,7 +51,7 @@ with its bearer token. WeChat login and agent-wechat setup are managed separatel
    }
    ```
 
-   Replace `replyer` with the printed reference and `wxid_example` with a direct
+   Replace `replier` with the printed reference and `wxid_example` with a direct
    chat or group ID from agent-wechat's `/api/chats`. Set `baseUrl` to your
    agent-wechat server root, without `/api`. `tools: []` starts without function
    calling; omit it to enable the built-in tools.
@@ -95,20 +95,37 @@ explicit directory, the server creates a default `{ "chats": [] }` on first run.
 | Windows | `%APPDATA%\chatserver` |
 
 The directory contains `config.json`, `models.json`, optional ignore/token files,
-and automatically managed `conversations/` memory files. An empty `chats` array
+optional `<messager_name>_context` files, and automatically managed `conversations/`
+memory files. An empty `chats` array
 runs no adapters.
+
+Set `messager.memoryTokenLimit` to change the token budget for each conversation
+file belonging to that pipeline, for example `"memoryTokenLimit": 4000`. The
+default is 1,000; valid limits are 100–16,000 tokens.
+Notes and confirmed replies share this budget, including their compact JSON
+metadata. Memory has a separate input allowance from the message snapshot.
+Restart after changing the limit; lowering it removes the oldest entries on
+the next turn for each conversation. Three-day expiry still applies. JSON
+indentation and the file version field are not counted.
 
 Each `chats` entry has a `messager` and optional `filters`:
 
 | Field | Meaning |
 | --- | --- |
 | `messager.name` | Adapter name; currently `wechat` |
-| `messager.replyer` | `<provider>/<model id>` from `models.json`, using the actual ID, not its CLI alias |
+| `messager.replier` | `<provider>/<model id>` from `models.json`, using the actual ID, not its CLI alias |
+| `messager.memoryTokenLimit` | Tokens per conversation for notes and confirmed replies; defaults to 1,000 |
+| `messager.persona` | Optional replier identity, tone, and conversational style |
 | `messager.mainAccount` | Optional exact sender ID allowed to query `/status` in a direct chat |
 | `messager.tools` | Tool names; omitted enables all built-ins, `[]` disables them |
 | `messager.options` | Adapter settings below |
 | `filters` | Ordered filters; omitted or `[]` skips filtering |
 | `stt` | Optional object with `type: "model"`, required `model`, and optional `audioConversionCmd`; omitted disables voice input |
+
+For example, set `messager.persona` to `"A warm, lightly humorous friend who gives practical photography advice."`
+Omitting it keeps the default helpful assistant. It affects only the replier;
+reply-length, citation, tool, JSON, and memory rules still apply. Restart the server
+after changing this setting.
 
 For editor completion and validation, add `$schema` pointing to
 [schemas/config.schema.json](schemas/config.schema.json) or
@@ -121,6 +138,30 @@ Inspect configuration without starting adapters:
 ```bash
 npm start -- --config_dir ./chatserver-config --print-config
 ```
+
+### Background context
+
+Optionally create `<config_dir>/<messager_name>_context` yourself, for example
+`chatserver-config/wechat_context`. Use plain UTF-8 text describing friends or
+channels, with their IDs to identify which background applies:
+
+```text
+Friend wxid_alice: Alice is learning photography and prefers brief, practical tips.
+Channel 123456@chatroom: A photography club discussing weekend outings.
+```
+
+Model inputs include the WeChat display name when available, and replies prefer
+that name when referring to a person. Stable wxids still identify speakers and
+control `mainAccount`, ignore rules, and delivery. Names may change or be shared;
+use wxids in background entries to keep them unambiguous.
+
+The background is included in model filter and replier inputs. It is shared by
+pipelines with the same messager name and re-read for each processed turn, so
+edits apply without restarting. Up to 2,000 tokens are included separately from
+the message snapshot budget; longer context is marked truncated. Missing or empty
+files add no context, and ChatServer never creates them. Read failures log a warning
+and continue without background. Context is not sent to the STT model or saved as
+conversation memory.
 
 ### WeChat options
 
@@ -208,7 +249,7 @@ and `filters` in the chat definition:
 
 ```json
 {
-  "messager": { "name": "wechat", "replyer": "local/your-model-id" },
+  "messager": { "name": "wechat", "replier": "local/your-model-id" },
   "stt": {
     "type": "model",
     "model": "speech-provider/your-stt-model-id",
@@ -224,7 +265,7 @@ uses that provider's saved key, timeout, and normal model retries; it does not n
 to support the Responses API. `model:test` sends chat prompts, not audio.
 
 `type` is currently `"model"`. An explicit `model` is required and must support
-transcription; it does not default to `messager.replyer`. Replace
+transcription; it does not default to `messager.replier`. Replace
 old string settings such as `"stt": "speech/model"` with the object above.
 
 `audioConversionCmd` is optional. Set it for WAV-only engines such as speech.cpp;
@@ -267,7 +308,7 @@ Without `stt`, voice messages are ignored without downloads or model requests.
   full and receive one formatting-only repair request without tools; a second
   invalid result stops delivery.
 - **Memory:** Compact notes and confirmed replies persist per conversation for
-  three days, capped at about 1,000 tokens. This is summarized context, not a raw
+  three days, capped at 1,000 tokens by default (`messager.memoryTokenLimit`). This is summarized context, not a raw
   message archive. Image bytes are not saved in memory.
 - **Tools:** `web_search` (DuckDuckGo), `read_url`, `calculate`, and `current_time`
   are enabled by default. Models need Responses API function calling to use them.
@@ -282,6 +323,8 @@ replies. Reply pacing is per process and does not guarantee protection from acco
 bans.
 
 ## Development
+
+Runtime limits and defaults are grouped and documented in [src/limit.ts](src/limit.ts).
 
 ```bash
 npm run dev        # Auto-reload

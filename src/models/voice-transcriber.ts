@@ -1,3 +1,4 @@
+import { MAX_MEDIA_ATTEMPTS } from '../limit';
 import { ConversationMessage, IncomingAudio } from '../messagers/interface';
 import { MediaUnavailableError } from '../messagers/media';
 import { PendingMediaError } from './pending-media';
@@ -59,20 +60,20 @@ export class VoiceTranscriber {
       if (error instanceof MediaUnavailableError) {
         return unavailable(error.message);
       }
-      if (++state.attempts < 3) {
+      if (++state.attempts < MAX_MEDIA_ATTEMPTS) {
         throw new PendingMediaError(`Voice media ${audio.id} could not be loaded; waiting for a later turn.`);
       }
-      return unavailable('media download failed after three attempts');
+      return unavailable(`media download failed after ${MAX_MEDIA_ATTEMPTS} attempts`);
     }
     signal?.throwIfAborted();
     if (loaded.status === 'unavailable') {
       return unavailable(loaded.reason ?? 'media unavailable');
     }
     if (loaded.status === 'pending') {
-      if (++state.attempts < 3) {
+      if (++state.attempts < MAX_MEDIA_ATTEMPTS) {
         throw new PendingMediaError(`Voice media ${audio.id} is pending; waiting for a later turn.`);
       }
-      return unavailable('media still pending after three attempts');
+      return unavailable(`media still pending after ${MAX_MEDIA_ATTEMPTS} attempts`);
     }
     state.attempts = 0;
     const input = this.audioConversionCmd === undefined ? loaded.audio :

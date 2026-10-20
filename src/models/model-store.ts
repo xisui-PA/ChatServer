@@ -1,6 +1,7 @@
+import { DEFAULT_MODEL_TIMEOUT_MS } from '../limit';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
-import { DEFAULT_MODEL_TIMEOUT_MS, resolveModelTimeoutMs } from './responses-client';
+import { resolveModelTimeoutMs } from './responses-client';
 
 /**
  * Name of the file that holds model configurations inside the config folder.

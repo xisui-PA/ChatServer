@@ -38,6 +38,8 @@ export interface ConversationMessage {
   text: string;
   /** Adapter-specific identifier for the sender (connection, user, etc.). */
   senderId: string;
+  /** Optional display name for conversational context; never an authorization key. */
+  senderName?: string;
   /** Context from our account; never independently triggers a reply. */
   isSelf?: boolean;
   /** Original timestamp, when supplied by the adapter. */
@@ -54,6 +56,8 @@ export interface IncomingMessage extends ConversationMessage {
   messages?: readonly ConversationMessage[];
   /** Pruned, persistent conversation notes and confirmed sent replies. */
   memory?: ConversationMemory;
+  /** Optional operator-written background from the messager's context file. */
+  additionalContext?: string;
   /** Optional channel or room the message belongs to. */
   channel?: string;
   /** Adapter-specific metadata, e.g. the remote IP address. */

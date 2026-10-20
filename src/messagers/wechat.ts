@@ -1,6 +1,18 @@
+import {
+  MAX_ENCODED_AUDIO_BYTES,
+  MAX_ENCODED_IMAGE_BYTES,
+  MAX_TIMER_MS,
+  MEDIA_RESPONSE_OVERHEAD_BYTES,
+  WECHAT_BUNDLE_GAP_MS,
+  WECHAT_CHAT_PAGE_SIZE,
+  WECHAT_MAX_BACKOFF_EXPONENT,
+  WECHAT_MESSAGE_PAGE_SIZE,
+  WECHAT_POLL_INTERVAL_MS,
+  WECHAT_REQUEST_TIMEOUT_MS
+} from '../limit';
 import { AudioLoadResult, ImageLoadResult, IncomingMessage, MessageHandler, MessagerAdapter, MessagerStatus, OutgoingMessage } from './interface';
-import { ImageUnavailableError, imageDataUrl, MAX_ENCODED_IMAGE_BYTES } from './images';
-import { audioFile, MAX_ENCODED_AUDIO_BYTES } from './audio';
+import { ImageUnavailableError, imageDataUrl } from './images';
+import { audioFile } from './audio';
 import { MediaUnavailableError } from './media';
 
 /** Options for the outbound-only agent-wechat REST adapter. */
@@ -29,6 +41,7 @@ interface WechatMessage {
   content: string;
   type: number;
   sender?: string;
+  senderName?: string | null;
   isSelf?: boolean;
   [key: string]: unknown;
 }
@@ -36,6 +49,11 @@ interface WechatMessage {
 /** Never pass raw image/voice message XML to models as the message body. */
 function messageText(message: WechatMessage): string {
   return message.type === 3 ? '[Image]' : message.type === 34 ? '[Voice]' : message.content;
+}
+
+/** The API resolves contact remarks/nicknames separately from the stable sender ID. */
+function displayName(message: WechatMessage): string | undefined {
+  return typeof message.senderName === 'string' ? message.senderName.trim() || undefined : undefined;
 }
 
 /** Retains HTTP status for media retry classification without retaining response bodies. */
@@ -53,8 +71,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** Validates a positive duration, including values supplied programmatically. */
 function duration(value: number | undefined, fallback: number, label: string): number {
   const result = value ?? fallback;
-  if (!Number.isSafeInteger(result) || result < 1 || result > 2_147_483_647) {
-    throw new Error(`WeChat ${label} must be a positive integer up to 2147483647.`);
+  if (!Number.isSafeInteger(result) || result < 1 || result > MAX_TIMER_MS) {
+    throw new Error(`WeChat ${label} must be a positive integer up to ${MAX_TIMER_MS}.`);
   }
   return result;
 }
@@ -92,9 +110,9 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       throw new Error('WeChat baseUrl must be an HTTP(S) URL without credentials, query, or fragment.');
     }
     this.baseUrl = url.toString().replace(/\/+$/, '');
-    this.interval = duration(options.pollIntervalMs, 30000, 'pollIntervalMs');
-    this.timeout = duration(options.timeoutMs, 30000, 'timeoutMs');
-    this.bundleGap = options.bundleGapMs === 0 ? 0 : duration(options.bundleGapMs, 20000, 'bundleGapMs');
+    this.interval = duration(options.pollIntervalMs, WECHAT_POLL_INTERVAL_MS, 'pollIntervalMs');
+    this.timeout = duration(options.timeoutMs, WECHAT_REQUEST_TIMEOUT_MS, 'timeoutMs');
+    this.bundleGap = options.bundleGapMs === 0 ? 0 : duration(options.bundleGapMs, WECHAT_BUNDLE_GAP_MS, 'bundleGapMs');
   }
 
   public async start(handler: MessageHandler): Promise<void> {
@@ -174,7 +192,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
         `/api/messages/${encodeURIComponent(chatId)}/media/${localId}?quality=best`,
         undefined,
         signal,
-        MAX_ENCODED_IMAGE_BYTES + 64 * 1024
+        MAX_ENCODED_IMAGE_BYTES + MEDIA_RESPONSE_OVERHEAD_BYTES
       );
     } catch (error) {
       if (error instanceof MediaUnavailableError) {
@@ -211,7 +229,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     let result: unknown;
     try {
       result = await this.request(`/api/messages/${encodeURIComponent(chatId)}/media/${localId}`,
-        undefined, signal, MAX_ENCODED_AUDIO_BYTES + 64 * 1024);
+        undefined, signal, MAX_ENCODED_AUDIO_BYTES + MEDIA_RESPONSE_OVERHEAD_BYTES);
     } catch (error) {
       if (error instanceof MediaUnavailableError || error instanceof WechatRequestError &&
         error.status >= 400 && error.status < 500 && error.status !== 408 && error.status !== 429) {
@@ -265,8 +283,8 @@ export class WechatMessagerAdapter implements MessagerAdapter {
           console.error('[wechat] polling failed:', error instanceof Error ? error.message : error);
         }
       }).finally(() => {
-        this.schedule(Math.min(2_147_483_647,
-          this.interval * 2 ** Math.min(this.failures, 6)));
+        this.schedule(Math.min(MAX_TIMER_MS,
+          this.interval * 2 ** Math.min(this.failures, WECHAT_MAX_BACKOFF_EXPONENT)));
       });
     }, delay);
   }
@@ -290,7 +308,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       this.chatFailures.clear();
     }
     const chats: Record<string, unknown>[] = [];
-    const pageSize = 100;
+    const pageSize = WECHAT_CHAT_PAGE_SIZE;
     for (let offset = 0; ; offset += pageSize) {
       const page = await this.request(`/api/chats?limit=${pageSize}&offset=${offset}`);
       if (!Array.isArray(page) || !page.every((chat) => isRecord(chat) && typeof chat.id === 'string')) {
@@ -339,7 +357,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
         this.recordPollError(error);
         const count = (this.chatFailures.get(chatId)?.count ?? 0) + 1;
         this.chatFailures.set(chatId, {
-          count, retryAt: Date.now() + Math.min(2_147_483_647, this.interval * 2 ** Math.min(count, 6))
+          count, retryAt: Date.now() + Math.min(MAX_TIMER_MS, this.interval * 2 ** Math.min(count, WECHAT_MAX_BACKOFF_EXPONENT))
         });
       }
     }
@@ -352,7 +370,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
 
   private async pollChat(chatId: string, cursor: Cursor): Promise<boolean> {
     const messages = new Map<number, WechatMessage>();
-    const pageSize = 50;
+    const pageSize = WECHAT_MESSAGE_PAGE_SIZE;
     let hadMessages = false;
     // The upstream API sorts newest first. Page back to the previous timestamp,
     // including its entire second so messages with equal timestamps aren't lost.
@@ -449,6 +467,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     this.handler?.({
       text,
       senderId: sender,
+      senderName: displayName(last),
       isSelf: first.isSelf === true,
       timestamp: last.timestamp,
       channel: chatId,
@@ -456,6 +475,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
         id: `message:${message.localId}`,
         text: messageText(message),
         senderId: message.isSelf ? account as string : message.sender as string,
+        senderName: displayName(message),
         isSelf: message.isSelf === true,
         timestamp: message.timestamp,
         images: message.type === 3 ? [{

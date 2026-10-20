@@ -67,7 +67,7 @@
       "properties": {
         "type": { "const": "model" },
         "model": {
-          "description": "Required <provider>/<model id> for audio/transcriptions. There is no fallback to messager.replyer.",
+          "description": "Required <provider>/<model id> for audio/transcriptions. There is no fallback to messager.replier.",
           "allOf": [{ "$ref": "#/definitions/modelReference" }]
         },
         "audioConversionCmd": {
@@ -83,15 +83,27 @@
       "additionalProperties": false,
       "required": [
         "name",
-        "replyer"
+        "replier"
       ],
       "properties": {
         "name": {
           "const": "wechat",
           "description": "Registered transport. WeChat is the built-in implementation."
         },
-        "replyer": {
+        "replier": {
           "$ref": "#/definitions/modelReference"
+        },
+        "memoryTokenLimit": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 16000,
+          "default": 1000,
+          "description": "Per-conversation token budget for this pipeline's memory notes and confirmed replies, including their compact JSON metadata. Oldest entries are removed first; three-day retention still applies."
+        },
+        "persona": {
+          "description": "Optional replier identity, tone, and style. Omit for the default helpful assistant. Applies only to the replier; output-format and reply-length requirements still apply.",
+          "allOf": [{ "$ref": "#/definitions/nonEmptyString" }],
+          "examples": ["A warm, lightly humorous friend who gives practical photography advice."]
         },
         "mainAccount": {
           "description": "Exact sender ID authorized to use /status in a direct chat; usually wxid_..., not a display name.",

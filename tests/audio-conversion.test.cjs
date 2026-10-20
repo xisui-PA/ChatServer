@@ -146,8 +146,8 @@ test('chat construction resolves explicit STT models and optional conversion set
   const references = [];
   const model = { transcribe: async () => '' };
   const options = { chats: [
-    { messager: { name: 'wechat', replyer: 'chat/default' }, stt: { type: 'model', model: 'speech/first' }, filters: [] },
-    { messager: { name: 'wechat', replyer: 'chat/default' }, stt: { type: 'model', model: 'speech/qwen', audioConversionCmd: 'ffmpeg -i {input} {output}' }, filters: [] }
+    { messager: { name: 'wechat', replier: 'chat/default' }, stt: { type: 'model', model: 'speech/first' }, filters: [] },
+    { messager: { name: 'wechat', replier: 'chat/default' }, stt: { type: 'model', model: 'speech/qwen', audioConversionCmd: 'ffmpeg -i {input} {output}' }, filters: [] }
   ] };
   const server = new ChatServer(options, '/unused');
   // Build chat bindings without starting transports or reading credentials.

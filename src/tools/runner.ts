@@ -1,3 +1,4 @@
+import { MAX_TOOL_ARGUMENT_CHARS, MAX_TOOL_OUTPUT_CHARS } from '../limit';
 import { Tool } from './interface';
 
 /** Executes only the functions explicitly supplied to this replier. */
@@ -17,7 +18,7 @@ export class ToolRunner {
   public async execute(name: string, encodedArgs: string, signal?: AbortSignal): Promise<string> {
     signal?.throwIfAborted();
     try {
-      if (encodedArgs.length > 16_384) {
+      if (encodedArgs.length > MAX_TOOL_ARGUMENT_CHARS) {
         throw new Error('Tool arguments exceed the size limit.');
       }
       const tool = this.tools.get(name);
@@ -28,7 +29,7 @@ export class ToolRunner {
       const result = await tool.execute(args, signal);
       signal?.throwIfAborted();
       const output = JSON.stringify({ ok: true, result });
-      if (output.length > 32_768) {
+      if (output.length > MAX_TOOL_OUTPUT_CHARS) {
         throw new Error('Tool output exceeds the size limit.');
       }
       return output;

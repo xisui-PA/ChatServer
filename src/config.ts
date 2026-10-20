@@ -1,3 +1,4 @@
+import { MAX_MEMORY_TOKEN_LIMIT, MIN_MEMORY_TOKEN_LIMIT } from './limit';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { hasFilter, listFilters } from './filters/registry';
@@ -10,7 +11,11 @@ export interface MessagerSpec {
   /** Registered messager name, e.g. `wechat`. */
   name: string;
   /** Reply model reference in <provider>/<model id> format. */
-  replyer: string;
+  replier: string;
+  /** Optional identity, tone, and conversational style for the replier. */
+  persona?: string;
+  /** Per-conversation budget shared by memory notes and confirmed replies. */
+  memoryTokenLimit?: number;
   /** Sender ID authorized to query server status in a direct chat. */
   mainAccount?: string;
   /** Replier tool names; omitted enables the four built-in tools, [] disables them. */
@@ -190,13 +195,23 @@ function modelReference(value: unknown, where: string): string {
 /** Parses the chat transport and its bound reply model. */
 function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
   if (!isPlainObject(value)) {
-    throw new ConfigError(`${where} must be an object with "name", "replyer", and optional "options".`);
+    throw new ConfigError(`${where} must be an object with "name", "replier", and optional "options".`);
   }
-  warnUnknownKeys(value, ['name', 'replyer', 'mainAccount', 'tools', 'options'], where);
+  warnUnknownKeys(value, ['name', 'replier', 'persona', 'memoryTokenLimit', 'mainAccount', 'tools', 'options'], where);
   if (typeof value.name !== 'string' || !value.name.trim()) {
     throw new ConfigError(`${where}: "name" must be a non-empty registered messager name.`);
   }
   const name = value.name.trim();
+  if (value.persona !== undefined &&
+    (typeof value.persona !== 'string' || !value.persona.trim())) {
+    throw new ConfigError(`${where}.persona must be a non-empty string.`);
+  }
+  const persona = (value.persona as string | undefined)?.trim();
+  const memoryTokenLimit = value.memoryTokenLimit;
+  if (memoryTokenLimit !== undefined && (typeof memoryTokenLimit !== 'number' || !Number.isInteger(memoryTokenLimit) ||
+    memoryTokenLimit < MIN_MEMORY_TOKEN_LIMIT || memoryTokenLimit > MAX_MEMORY_TOKEN_LIMIT)) {
+    throw new ConfigError(`${where}.memoryTokenLimit must be an integer between ${MIN_MEMORY_TOKEN_LIMIT} and ${MAX_MEMORY_TOKEN_LIMIT}.`);
+  }
   if (value.mainAccount !== undefined &&
     (typeof value.mainAccount !== 'string' || !value.mainAccount.trim())) {
     throw new ConfigError(`${where}.mainAccount must be a non-empty sender ID.`);
@@ -218,7 +233,8 @@ function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
     }
     tools = [...new Set(value.tools as string[])];
   }
-  return { name, replyer: modelReference(value.replyer, `${where}.replyer`), mainAccount, options, tools };
+  return { name, replier: modelReference(value.replier, `${where}.replier`), persona,
+    memoryTokenLimit: memoryTokenLimit as number | undefined, mainAccount, options, tools };
 }
 
 /** Parses a filter specification and validates its registered name. */

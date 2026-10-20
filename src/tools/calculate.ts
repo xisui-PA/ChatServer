@@ -1,3 +1,4 @@
+import { MAX_CALCULATE_ARGUMENTS, MAX_CALCULATE_EXPRESSION_CHARS, MAX_CALCULATE_TOKENS } from '../limit';
 import { Tool, ToolDefinition, stringArgument, toolArguments } from './interface';
 
 interface MathFunction {
@@ -13,8 +14,8 @@ const functions = new Map<string, MathFunction>([
     log: Math.log10, exp: Math.exp
   }).map(([name, call]): [string, MathFunction] => [name, { minimum: 1, maximum: 1, call }]),
   ['pow', { minimum: 2, maximum: 2, call: Math.pow }],
-  ['min', { minimum: 1, maximum: 16, call: Math.min }],
-  ['max', { minimum: 1, maximum: 16, call: Math.max }]
+  ['min', { minimum: 1, maximum: MAX_CALCULATE_ARGUMENTS, call: Math.min }],
+  ['max', { minimum: 1, maximum: MAX_CALCULATE_ARGUMENTS, call: Math.max }]
 ]);
 
 /** A bounded arithmetic grammar. Never evaluates JavaScript or accesses properties. */
@@ -30,8 +31,8 @@ class ExpressionParser {
         throw new Error('Invalid arithmetic token.');
       }
       this.tokens.push(token[1]);
-      if (this.tokens.length > 256) {
-        throw new Error('Expression exceeds 256 tokens.');
+      if (this.tokens.length > MAX_CALCULATE_TOKENS) {
+        throw new Error(`Expression exceeds ${MAX_CALCULATE_TOKENS} tokens.`);
       }
       rest = rest.slice(token[0].length);
     }
@@ -171,7 +172,7 @@ export class CalculateTool implements Tool {
 
   public execute(args: unknown): Promise<unknown> {
     const values = toolArguments(args, ['expression']);
-    const expression = stringArgument(values, 'expression', 1000);
+    const expression = stringArgument(values, 'expression', MAX_CALCULATE_EXPRESSION_CHARS);
     return Promise.resolve({ expression, result: new ExpressionParser(expression).evaluate() });
   }
 }
