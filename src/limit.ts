@@ -26,6 +26,8 @@ export const MESSAGE_TEXT_TOKENS = 2_000;
 export const MIN_MESSAGE_TEXT_TOKENS = 500;
 /** Maximum tokens for a sender or channel identifier in model input. */
 export const CONVERSATION_ID_TOKENS = 100;
+/** Maximum tokens for one sender display name in conversational context. */
+export const SENDER_NAME_TOKENS = 100;
 /** Separate token budget for the optional messager context file. */
 export const MESSAGER_CONTEXT_TOKENS = 2_000;
 /** Total application input budget, including instructions, tools, and images. */

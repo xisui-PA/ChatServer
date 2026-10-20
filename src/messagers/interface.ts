@@ -38,6 +38,8 @@ export interface ConversationMessage {
   text: string;
   /** Adapter-specific identifier for the sender (connection, user, etc.). */
   senderId: string;
+  /** Optional display name for conversational context; never an authorization key. */
+  senderName?: string;
   /** Context from our account; never independently triggers a reply. */
   isSelf?: boolean;
   /** Original timestamp, when supplied by the adapter. */

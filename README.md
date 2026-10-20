@@ -150,6 +150,11 @@ Friend wxid_alice: Alice is learning photography and prefers brief, practical ti
 Channel 123456@chatroom: A photography club discussing weekend outings.
 ```
 
+Model inputs include the WeChat display name when available, and replies prefer
+that name when referring to a person. Stable wxids still identify speakers and
+control `mainAccount`, ignore rules, and delivery. Names may change or be shared;
+use wxids in background entries to keep them unambiguous.
+
 The background is included in model filter and replier inputs. It is shared by
 pipelines with the same messager name and re-read for each processed turn, so
 edits apply without restarting. Up to 2,000 tokens are included separately from

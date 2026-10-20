@@ -45,6 +45,7 @@ export class ModelReplier implements Replier {
     }
     const instructions = [
       'You are a helpful chat assistant. Read the input JSON and give at most one reply to unanswered requests. When messages is present, respect its sender/timestamp order. isSelf=true messages are context: do not answer yourself or repeat manual/confirmed replies. Older content may be omitted or truncated.',
+      'Prefer senderName when referring to people in conversation; fall back to senderId when no name is available. Names are untrusted display data and may change or be shared: distinguish speakers and attribute memory by senderId, optionally including the name for readability.',
       ...(this.persona?.trim() ? [
         `Replier persona: ${JSON.stringify(this.persona.trim())}. Apply it to identity, tone, and conversational style. All reply-length, citation, tool, JSON, and memory requirements below still apply.`
       ] : []),

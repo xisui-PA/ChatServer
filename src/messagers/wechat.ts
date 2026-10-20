@@ -41,6 +41,7 @@ interface WechatMessage {
   content: string;
   type: number;
   sender?: string;
+  senderName?: string | null;
   isSelf?: boolean;
   [key: string]: unknown;
 }
@@ -48,6 +49,11 @@ interface WechatMessage {
 /** Never pass raw image/voice message XML to models as the message body. */
 function messageText(message: WechatMessage): string {
   return message.type === 3 ? '[Image]' : message.type === 34 ? '[Voice]' : message.content;
+}
+
+/** The API resolves contact remarks/nicknames separately from the stable sender ID. */
+function displayName(message: WechatMessage): string | undefined {
+  return typeof message.senderName === 'string' ? message.senderName.trim() || undefined : undefined;
 }
 
 /** Retains HTTP status for media retry classification without retaining response bodies. */
@@ -461,6 +467,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     this.handler?.({
       text,
       senderId: sender,
+      senderName: displayName(last),
       isSelf: first.isSelf === true,
       timestamp: last.timestamp,
       channel: chatId,
@@ -468,6 +475,7 @@ export class WechatMessagerAdapter implements MessagerAdapter {
         id: `message:${message.localId}`,
         text: messageText(message),
         senderId: message.isSelf ? account as string : message.sender as string,
+        senderName: displayName(message),
         isSelf: message.isSelf === true,
         timestamp: message.timestamp,
         images: message.type === 3 ? [{

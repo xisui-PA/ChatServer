@@ -324,6 +324,7 @@ export class ChatServer {
           id: source.id ?? `message:${randomUUID()}`,
           text: source.text,
           senderId: source.senderId,
+          senderName: source.senderName,
           isSelf: source.isSelf === true,
           images: source.images,
           audio: source.audio,

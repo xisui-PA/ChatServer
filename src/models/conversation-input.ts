@@ -8,9 +8,10 @@ import {
   MAX_MESSAGES_PER_SNAPSHOT,
   MESSAGER_CONTEXT_TOKENS,
   MESSAGE_TEXT_TOKENS,
-  MIN_MESSAGE_TEXT_TOKENS
+  MIN_MESSAGE_TEXT_TOKENS,
+  SENDER_NAME_TOKENS
 } from '../limit';
-import { IncomingImage, IncomingMessage } from '../messagers/interface';
+import { ConversationMessage, IncomingImage, IncomingMessage } from '../messagers/interface';
 import { ImageUnavailableError } from '../messagers/images';
 import { ResponseItem } from './responses-client';
 import { boundedText } from './input-budget';
@@ -28,11 +29,18 @@ const attempts = new WeakMap<IncomingImage, number>();
 /** A turn's model filters and replier share one download of each selected image. */
 const inputs = new WeakMap<IncomingMessage, Promise<string | readonly ResponseItem[]>>();
 
+/** Display names are optional, bounded data; IDs remain available for attribution. */
+function boundedSenderName(message: ConversationMessage): string | undefined {
+  const name = message.senderName?.trim();
+  return name ? boundedText(name, SENDER_NAME_TOKENS) : undefined;
+}
+
 /** Bounds serialized JSON, preserving recent messages and valid structure. */
 function boundedSnapshot(message: IncomingMessage): Record<string, unknown>[] {
   const sources = (message.messages ?? [message]).slice(-MAX_MESSAGES_PER_SNAPSHOT);
   const messages = sources.map((source) => ({
     id: source.id ?? '', senderId: boundedText(source.senderId, CONVERSATION_ID_TOKENS),
+    senderName: boundedSenderName(source),
     timestamp: source.timestamp, isSelf: source.isSelf === true,
     text: boundedText(source.text, MESSAGE_TEXT_TOKENS),
     images: source.images?.slice(-MAX_IMAGES_PER_SNAPSHOT).map((image) => ({ id: image.id }))
@@ -103,7 +111,8 @@ async function buildInput(message: IncomingMessage, signal?: AbortSignal): Promi
           const dataUrl = await loadImage(image, signal);
           if (dataUrl !== undefined) {
             parts.push({ type: 'input_text', text: JSON.stringify({
-              imageId: image.id, messageId: source.id, senderId: source.senderId, timestamp: source.timestamp
+              imageId: image.id, messageId: source.id, senderId: source.senderId,
+              senderName: boundedSenderName(source), timestamp: source.timestamp
             }) });
             parts.push({ type: 'input_image', image_url: dataUrl, detail: 'auto' });
             status = 'attached';
