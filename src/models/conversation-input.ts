@@ -1,7 +1,7 @@
 import { IncomingImage, IncomingMessage } from '../messagers/interface';
 import { ImageUnavailableError } from '../messagers/images';
 import { ResponseItem } from './responses-client';
-import { boundedText, CONVERSATION_TEXT_TOKENS } from './input-budget';
+import { boundedText, CONVERSATION_TEXT_TOKENS, MESSAGER_CONTEXT_TOKENS } from './input-budget';
 import { countTokens } from './tokens';
 import { PendingMediaError } from './pending-media';
 
@@ -118,13 +118,17 @@ async function buildInput(message: IncomingMessage, signal?: AbortSignal): Promi
   if (pending) {
     throw new PendingImagesError();
   }
-  const text = JSON.stringify({
+  const conversation = {
     channel: boundedText(message.channel ?? message.senderId, 100),
     messages, memory: message.memory, currentTimestamp: new Date().toISOString()
-  });
-  if (countTokens(text) > CONVERSATION_TEXT_TOKENS) {
+  };
+  if (countTokens(JSON.stringify(conversation)) > CONVERSATION_TEXT_TOKENS) {
     throw new Error('Conversation metadata exceeds the text input budget.');
   }
+  const context = message.additionalContext?.trim();
+  const text = JSON.stringify(context ? {
+    ...conversation, additionalContext: boundedText(context, MESSAGER_CONTEXT_TOKENS)
+  } : conversation);
   return parts.length === 0 ? text : [{ role: 'user', content: [{ type: 'input_text', text }, ...parts] }];
 }
 

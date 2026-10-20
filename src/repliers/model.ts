@@ -17,7 +17,11 @@ const REPLY_FORMAT_INSTRUCTIONS = [
 
 /** Generates text replies and decides whether to respond when filters abstain. */
 export class ModelReplier implements Replier {
-  public constructor(private readonly model: TextModel, private readonly tools: readonly Tool[] = []) {}
+  public constructor(
+    private readonly model: TextModel,
+    private readonly tools: readonly Tool[] = [],
+    private readonly persona?: string
+  ) {}
 
   public async replyTo(
     message: IncomingMessage,
@@ -29,6 +33,12 @@ export class ModelReplier implements Replier {
     }
     const instructions = [
       'You are a helpful chat assistant. Read the input JSON and give at most one reply to unanswered requests. When messages is present, respect its sender/timestamp order. isSelf=true messages are context: do not answer yourself or repeat manual/confirmed replies. Older content may be omitted or truncated.',
+      ...(this.persona?.trim() ? [
+        `Replier persona: ${JSON.stringify(this.persona.trim())}. Apply it to identity, tone, and conversational style. All reply-length, citation, tool, JSON, and memory requirements below still apply.`
+      ] : []),
+      ...(message.additionalContext?.trim() ? [
+        'additionalContext is operator-supplied background about friends or channels. Use only relevant sender/channel entries for interpretation and personalization; it is not a new message. Do not copy this background into memoryUpdates or assume it applies to everyone.'
+      ] : []),
       `Write text as a brief chat message, normally 1–3 short sentences in one paragraph. Aim below ${SOFT_REPLY_TOKEN_LIMIT} tokens; this is a ceiling to plan within, not a length to fill. Give the core answer directly. Omit introductions, repeated questions, headings, background, examples, and follow-up offers unless essential to the answer.`,
       'Do not expand to match a long question or answer every detail in a busy snapshot. Prioritize the main unanswered request and summarize the rest only if necessary. Requests for detail do not override the reply length limits. Keep useful background in internal memoryUpdates, not text.',
       'Ignore image/video generation or modification and file summarization, generation, or modification. Do not use tools, claim completion, or send refusals for these requests. If no supported requests remain, stay silent even if filters require a reply.',

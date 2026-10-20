@@ -14,6 +14,7 @@ import { limitReplyText } from './repliers/limits';
 import { ResponsesApiError } from './models/responses-client';
 import { PendingMediaError } from './models/pending-media';
 import { VoiceTranscriber } from './models/voice-transcriber';
+import { MessagerContextFile } from './messagers/context-file';
 
 export * from './filters/interface';
 export * from './filters/ignore-file';
@@ -40,6 +41,7 @@ interface ResolvedChat {
   replier: Replier;
   replierModel: string;
   stt?: VoiceTranscriber;
+  contextFile?: MessagerContextFile;
 }
 
 /** Bounded context since the last successful reply, plus scheduling state. */
@@ -117,8 +119,11 @@ export class ChatServer {
       return {
         name,
         mainAccount: definition.messager.mainAccount,
-        replier: new ModelReplier(models.get(definition.messager.replyer), createTools(definition.messager.tools)),
-        replierModel: definition.messager.replyer,
+        replier: new ModelReplier(
+          models.get(definition.messager.replier), createTools(definition.messager.tools), definition.messager.persona
+        ),
+        replierModel: definition.messager.replier,
+        contextFile: new MessagerContextFile(this.configDir, definition.messager.name),
         stt: definition.stt === undefined ? undefined : new VoiceTranscriber(
           models.getTranscriber(definition.stt.model),
           definition.stt.model,
@@ -148,7 +153,7 @@ export class ChatServer {
       this.startedAt = Date.now();
       await this.memory.start();
       const references = this.options.chats.flatMap((chat) => [
-        chat.messager.replyer,
+        chat.messager.replier,
         ...(chat.stt === undefined ? [] : [chat.stt.model]),
         ...chat.filters.flatMap((filter) => filter.model === undefined ? [] : [filter.model])
       ]);
@@ -464,6 +469,7 @@ export class ChatServer {
       return false;
     }
     console.log(`[chat:${chat.name}] processing ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}`);
+    message = { ...message, additionalContext: await chat.contextFile?.load() };
     try {
       message = { ...message, memory: await this.memory.load(memoryKey) };
     } catch (error) {

@@ -54,6 +54,8 @@ export interface IncomingMessage extends ConversationMessage {
   messages?: readonly ConversationMessage[];
   /** Pruned, persistent conversation notes and confirmed sent replies. */
   memory?: ConversationMemory;
+  /** Optional operator-written background from the messager's context file. */
+  additionalContext?: string;
   /** Optional channel or room the message belongs to. */
   channel?: string;
   /** Adapter-specific metadata, e.g. the remote IP address. */

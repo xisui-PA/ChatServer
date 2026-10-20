@@ -3,6 +3,7 @@ import { countTokens, limitTextTokens } from './tokens';
 
 /** Application budgets; image estimates are independent of provider billing. */
 export const CONVERSATION_TEXT_TOKENS = 8_000;
+export const MESSAGER_CONTEXT_TOKENS = 2_000;
 export const MODEL_INPUT_TOKENS = 64_000;
 export const TOOL_RESULT_TOKENS = 8_000;
 const IMAGE_TOKEN_RESERVE = 2_048;
