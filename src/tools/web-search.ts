@@ -76,7 +76,7 @@ export class WebSearchTool implements Tool {
   public readonly definition: ToolDefinition = {
     type: 'function',
     name: 'web_search',
-    description: 'Search the public web for current information. Returns up to 5 titles, URLs, and snippets. Use read_url to read sources and cite their URLs.',
+    description: 'Search the public web for current information. Returns up to 5 titles, URLs, and snippets. Use read_url to verify sources. Include citations only when the user explicitly asks for them.',
     parameters: {
       type: 'object', properties: { query: { type: 'string' } }, required: ['query'], additionalProperties: false
     },

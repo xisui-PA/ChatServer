@@ -212,8 +212,9 @@ Existing provider keys are reused. For missing keys, add reads `--api-key`, then
   skipped. Up to four images per snapshot, each at most 5 MiB, are loaded lazily.
   Models receiving them must support image input. Pending media gets bounded
   retries; unavailable images are labeled rather than guessed.
-- **Replies:** Text-only, with a 150-token target and 200-token hard cap. Oversized
-  text is truncated locally. Malformed reply JSON or memory updates are logged in
+- **Replies:** Normally 1–2 short sentences, with a 150-token target and 200-token
+  hard cap. Citations are included only when explicitly requested. Oversized text
+  is truncated locally. Malformed reply JSON or memory updates are logged in
   full and receive one formatting-only repair request without tools; a second
   invalid result stops delivery.
 - **Memory:** Compact notes and confirmed replies persist per conversation for

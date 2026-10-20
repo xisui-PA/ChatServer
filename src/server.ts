@@ -37,6 +37,7 @@ interface ResolvedChat {
   messager: MessagerAdapter;
   filters: readonly FilterAdapter[];
   replier: Replier;
+  replierModel: string;
 }
 
 /** Bounded context since the last successful reply, plus scheduling state. */
@@ -115,6 +116,7 @@ export class ChatServer {
         name,
         mainAccount: definition.messager.mainAccount,
         replier: new ModelReplier(models.get(definition.messager.replyer), createTools(definition.messager.tools)),
+        replierModel: definition.messager.replyer,
         messager: createMessager(definition.messager.name, definition.messager.options ?? {}, {
           chatName: name,
           configDir: this.configDir,
@@ -203,11 +205,7 @@ export class ChatServer {
     const sources = message.messages?.length ? message.messages : [message];
     let selected = sources.filter((source) => source.text.trim() !== '/status');
     try {
-      for (const filter of chat.filters) {
-        if (filter.selectMessages !== undefined) {
-          selected = [...await filter.selectMessages(selected)];
-        }
-      }
+      selected = await this.selectMessages(chat, selected, message.channel ?? message.senderId);
     } catch {
       // Let the normal worker fail closed, report the error, and decide about retries.
       this.enqueueMessage(chat, message);
@@ -218,6 +216,29 @@ export class ChatServer {
     if (messages.length > 0) {
       this.enqueueMessage(chat, { ...message, messages });
     }
+  }
+
+  /** Logs exclusions at ingestion and when a changed ignore list prunes queued context. */
+  private async selectMessages(
+    chat: ResolvedChat,
+    messages: readonly ConversationMessage[],
+    conversationId: string
+  ): Promise<ConversationMessage[]> {
+    let selected = [...messages];
+    for (const filter of chat.filters) {
+      if (filter.selectMessages === undefined) {
+        continue;
+      }
+      const next = [...await filter.selectMessages(selected)];
+      const retained = new Set(next);
+      const excluded = selected.filter((source) => !retained.has(source));
+      if (excluded.length > 0) {
+        const senders = [...new Set(excluded.map((source) => source.senderId))].join(', ');
+        console.log(`[chat:${chat.name}] dropped ${excluded.length} message(s) in ${conversationId} from ${senders} by filter "${filter.name}"`);
+      }
+      selected = next;
+    }
+    return selected;
   }
 
   /** Updates bounded context without adding duplicate conversation entries. */
@@ -340,15 +361,12 @@ export class ChatServer {
           const selfRevision = conversation.selfRevision;
           let messages = conversation.messages.map((entry) => entry.message);
           // Exclusions apply before all decision filters, regardless of their order.
-          for (const filter of conversation.chat.filters) {
-            if (filter.selectMessages !== undefined) {
-              try {
-                messages = [...await filter.selectMessages(messages)];
-              } catch (error) {
-                this.filterFailures += 1;
-                throw error;
-              }
-            }
+          try {
+            messages = await this.selectMessages(conversation.chat, messages,
+              conversation.latest.channel ?? conversation.latest.senderId);
+          } catch (error) {
+            this.filterFailures += 1;
+            throw error;
           }
           const retained = new Set(messages);
           conversation.messages = conversation.messages.filter((entry) => entry.revision > revision || retained.has(entry.message));
@@ -446,7 +464,7 @@ export class ChatServer {
       }
       if (evaluation.outcome === FilterOutcome.Denied) {
         const reason = evaluation.decidedBy ? ` by filter "${evaluation.decidedBy}"` : '';
-        console.log(`[chat:${chat.name}] dropped message from ${message.senderId}${reason}`);
+        console.log(`[chat:${chat.name}] dropped ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}${reason}`);
         return false;
       }
       outcome = evaluation.outcome;
@@ -474,7 +492,11 @@ export class ChatServer {
     if (conversation.selfRevision !== selfRevision) {
       throw new SupersededTurnError();
     }
-    if (this.closed || reply === undefined) {
+    if (this.closed) {
+      return false;
+    }
+    if (reply === undefined) {
+      console.log(`[chat:${chat.name}] skipped reply to ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}: replier "${chat.replierModel}" chose not to reply`);
       return false;
     }
     if (await this.deliverReply(chat, message, reply)) {
