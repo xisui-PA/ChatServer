@@ -108,7 +108,7 @@ Each `chats` entry has a `messager` and optional `filters`:
 | `messager.tools` | Tool names; omitted enables all built-ins, `[]` disables them |
 | `messager.options` | Adapter settings below |
 | `filters` | Ordered filters; omitted or `[]` skips filtering |
-| `stt` | Optional `<provider>/<model id>` for transcribing incoming voice messages; omitted disables voice input |
+| `stt` | Optional object with `type: "model"`, required `model`, and optional `audioConversionCmd`; omitted disables voice input |
 
 For editor completion and validation, add `$schema` pointing to
 [schemas/config.schema.json](schemas/config.schema.json) or
@@ -209,7 +209,11 @@ and `filters` in the chat definition:
 ```json
 {
   "messager": { "name": "wechat", "replyer": "local/your-model-id" },
-  "stt": "speech-provider/your-stt-model-id",
+  "stt": {
+    "type": "model",
+    "model": "speech-provider/your-stt-model-id",
+    "audioConversionCmd": "ffmpeg -nostdin -y -i {input} -ar 16000 -ac 1 -c:a pcm_s16le {output}"
+  },
   "filters": []
 }
 ```
@@ -218,6 +222,20 @@ The STT provider must implement the [OpenAI-compatible transcription endpoint](h
 (`POST <baseUrl>/audio/transcriptions`, multipart `file`/`model`, JSON `text`). It
 uses that provider's saved key, timeout, and normal model retries; it does not need
 to support the Responses API. `model:test` sends chat prompts, not audio.
+
+`type` is currently `"model"`. An explicit `model` is required and must support
+transcription; it does not default to `messager.replyer`. Replace
+old string settings such as `"stt": "speech/model"` with the object above.
+
+`audioConversionCmd` is optional. Set it for WAV-only engines such as speech.cpp;
+omit it to upload the original audio. Install the converter (FFmpeg in this example)
+on the **ChatServer machine**, available on PATH or specified by an absolute path.
+The command runs in a temporary directory with `{input}` and `{output}` replaced
+by generated filenames; it must write WAV to `{output}`. Quote executable paths
+containing spaces using your operating system's shell syntax (escape double quotes
+in JSON). Conversion has a 30-second deadline, supports shutdown cancellation, and
+removes temporary files afterwards. Conversion errors stop the turn before any
+STT request; cached successful transcripts do not repeat conversion.
 
 Voice messages are transcribed sequentially after the reply delay and sender
 exclusions, before model filters and the replier. Transcripts retain the original

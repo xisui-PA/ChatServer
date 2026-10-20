@@ -32,18 +32,26 @@ function voice(id = '1', senderId = 'sender', load = async () => ({ status: 'rea
   return { id: `message:${id}`, senderId, text: '[Voice]', timestamp: '2026-10-19T10:00:00.000Z', audio: { id: `voice:${id}`, load } };
 }
 
-test('config accepts an optional STT reference and rejects malformed references', async () => {
+test('config allows omitted STT but requires a valid explicit model when STT is configured', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'chatserver-voice-config-'));
   try {
     const chat = { messager: { name: 'wechat', replyer: 'chat/model' }, filters: [] };
-    for (const stt of [undefined, 'speech/org/model']) {
+    for (const stt of [undefined, { type: 'model', model: 'speech/org/model' },
+      { type: 'model', model: 'speech/model', audioConversionCmd: 'ffmpeg -i {input} {output}' }]) {
       await fs.writeFile(path.join(dir, 'config.json'), JSON.stringify({ chats: [{ ...chat, stt }] }));
-      assert.equal((await loadConfig(dir)).values.chats[0].stt, stt);
+      const resolved = (await loadConfig(dir)).values.chats[0].stt;
+      assert.deepEqual(JSON.parse(JSON.stringify(resolved ?? null)), stt ?? null);
     }
-    for (const stt of [null, '', 'model', 42, {}]) {
+    for (const stt of [null, '', 'speech/model', 42, {}, { type: 'other' }, { type: 'model' },
+      { type: 'model', model: '' }, { type: 'model', model: null },
+      { type: 'model', model: 'speech/model', audioConversionCmd: '' },
+      { type: 'model', model: 'speech/model', audioConversionCmd: 'ffmpeg' },
+      { type: 'model', model: 'speech/model', audioConversionCmd: 42 }]) {
       await fs.writeFile(path.join(dir, 'config.json'), JSON.stringify({ chats: [{ ...chat, stt }] }));
       await assert.rejects(loadConfig(dir), /stt/);
     }
+    await fs.writeFile(path.join(dir, 'config.json'), JSON.stringify({ chats: [{ ...chat, stt: { type: 'model' } }] }));
+    await assert.rejects(loadConfig(dir), /chats\[0\]\.stt\.model must be a non-empty/);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }
@@ -296,7 +304,7 @@ test('STT registry uses the configured provider/model and normal retry policy', 
 
 test('startup includes the optional STT model in provider resolution', async (t) => {
   quiet(t);
-  const options = { chats: [{ messager: { name: 'wechat', replyer: 'chat/model' }, stt: 'speech/stt', filters: [] }] };
+  const options = { chats: [{ messager: { name: 'wechat', replyer: 'chat/model' }, stt: { type: 'model', model: 'speech/stt' }, filters: [] }] };
   const server = new ChatServer(options, '/unused');
   server.memory.start = async () => {};
   server.memory.close = async () => {};

@@ -119,7 +119,11 @@ export class ChatServer {
         mainAccount: definition.messager.mainAccount,
         replier: new ModelReplier(models.get(definition.messager.replyer), createTools(definition.messager.tools)),
         replierModel: definition.messager.replyer,
-        stt: definition.stt === undefined ? undefined : new VoiceTranscriber(models.getTranscriber(definition.stt), definition.stt),
+        stt: definition.stt === undefined ? undefined : new VoiceTranscriber(
+          models.getTranscriber(definition.stt.model),
+          definition.stt.model,
+          definition.stt.audioConversionCmd
+        ),
         messager: createMessager(definition.messager.name, definition.messager.options ?? {}, {
           chatName: name,
           configDir: this.configDir,
@@ -145,7 +149,7 @@ export class ChatServer {
       await this.memory.start();
       const references = this.options.chats.flatMap((chat) => [
         chat.messager.replyer,
-        ...(chat.stt === undefined ? [] : [chat.stt]),
+        ...(chat.stt === undefined ? [] : [chat.stt.model]),
         ...chat.filters.flatMap((filter) => filter.model === undefined ? [] : [filter.model])
       ]);
       const models = await ModelRegistry.load(this.configDir, references);

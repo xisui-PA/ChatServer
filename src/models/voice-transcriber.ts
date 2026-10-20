@@ -2,6 +2,7 @@ import { ConversationMessage, IncomingAudio } from '../messagers/interface';
 import { MediaUnavailableError } from '../messagers/media';
 import { PendingMediaError } from './pending-media';
 import { TranscriptionModel } from './transcriptions-client';
+import { convertAudio } from './audio-conversion';
 
 interface VoiceState {
   attempts: number;
@@ -13,7 +14,11 @@ interface VoiceState {
 export class VoiceTranscriber {
   private readonly states = new WeakMap<IncomingAudio, VoiceState>();
 
-  public constructor(private readonly model: TranscriptionModel, private readonly modelReference: string) {}
+  public constructor(
+    private readonly model: TranscriptionModel,
+    private readonly modelReference: string,
+    private readonly audioConversionCmd?: string
+  ) {}
 
   /** Keeps author/time/ID metadata, replacing audio with ordinary untrusted transcript text. */
   public async transcribe(messages: readonly ConversationMessage[], signal?: AbortSignal): Promise<ConversationMessage[]> {
@@ -70,8 +75,10 @@ export class VoiceTranscriber {
       return unavailable('media still pending after three attempts');
     }
     state.attempts = 0;
+    const input = this.audioConversionCmd === undefined ? loaded.audio :
+      await convertAudio(loaded.audio, this.audioConversionCmd, signal);
     // Provider errors retain the unresolved source; normal model retries happen inside transcribe.
-    const text = (await this.model.transcribe(loaded.audio, signal)).trim();
+    const text = (await this.model.transcribe(input, signal)).trim();
     signal?.throwIfAborted();
     if (!text) {
       return unavailable('no speech recognized');
