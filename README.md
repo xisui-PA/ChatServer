@@ -99,12 +99,22 @@ optional `<messager_name>_context` files, and automatically managed `conversatio
 memory files. An empty `chats` array
 runs no adapters.
 
+Set `messager.memoryTokenLimit` to change the token budget for each conversation
+file belonging to that pipeline, for example `"memoryTokenLimit": 4000`. The
+default is 1,000; valid limits are 100–16,000 tokens.
+Notes and confirmed replies share this budget, including their compact JSON
+metadata. Memory has a separate input allowance from the message snapshot.
+Restart after changing the limit; lowering it removes the oldest entries on
+the next turn for each conversation. Three-day expiry still applies. JSON
+indentation and the file version field are not counted.
+
 Each `chats` entry has a `messager` and optional `filters`:
 
 | Field | Meaning |
 | --- | --- |
 | `messager.name` | Adapter name; currently `wechat` |
 | `messager.replier` | `<provider>/<model id>` from `models.json`, using the actual ID, not its CLI alias |
+| `messager.memoryTokenLimit` | Tokens per conversation for notes and confirmed replies; defaults to 1,000 |
 | `messager.persona` | Optional replier identity, tone, and conversational style |
 | `messager.mainAccount` | Optional exact sender ID allowed to query `/status` in a direct chat |
 | `messager.tools` | Tool names; omitted enables all built-ins, `[]` disables them |
@@ -293,7 +303,7 @@ Without `stt`, voice messages are ignored without downloads or model requests.
   full and receive one formatting-only repair request without tools; a second
   invalid result stops delivery.
 - **Memory:** Compact notes and confirmed replies persist per conversation for
-  three days, capped at about 1,000 tokens. This is summarized context, not a raw
+  three days, capped at 1,000 tokens by default (`messager.memoryTokenLimit`). This is summarized context, not a raw
   message archive. Image bytes are not saved in memory.
 - **Tools:** `web_search` (DuckDuckGo), `read_url`, `calculate`, and `current_time`
   are enabled by default. Models need Responses API function calling to use them.
@@ -308,6 +318,8 @@ replies. Reply pacing is per process and does not guarantee protection from acco
 bans.
 
 ## Development
+
+Runtime limits and defaults are grouped and documented in [src/limit.ts](src/limit.ts).
 
 ```bash
 npm run dev        # Auto-reload

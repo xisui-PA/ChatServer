@@ -1,6 +1,7 @@
+import { DEFAULT_MODEL_TIMEOUT_MS } from '../limit';
 import { createCredentialStore } from './credentials';
 import { CliError, hasFlag, optionalValue, promptLine, resolveConfigDir } from './cli-support';
-import { DEFAULT_TIMEOUT_MS, modelTimeoutOption, newApiKey, parseCommandOptions } from './command-support';
+import { modelTimeoutOption, newApiKey, parseCommandOptions } from './command-support';
 import { setupBaseUrl, setupInteractive, setupModelId, setupPrompt, setupProvider, setupValue } from './setup';
 import {
   ensureProvider,
@@ -27,7 +28,7 @@ Options:
   --name <name>          Name used to refer to the model (default: the model id)
   --base-url <url>       OpenAI-compatible base URL (required for new providers)
   --api-key <key>        API key to store for the provider
-  --timeout <ms>         Provider model timeout (default: ${DEFAULT_TIMEOUT_MS} for new providers)
+  --timeout <ms>         Provider model timeout (default: ${DEFAULT_MODEL_TIMEOUT_MS} for new providers)
   --config_dir <dir>     Config folder
   --force                Overwrite an existing model without asking
   -i, --interactive      Prompt for the optional model name too

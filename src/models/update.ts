@@ -1,6 +1,7 @@
+import { DEFAULT_MODEL_TIMEOUT_MS } from '../limit';
 import { createCredentialStore } from './credentials';
 import { CliError, hasFlag, optionalValue, promptHidden, resolveConfigDir } from './cli-support';
-import { DEFAULT_TIMEOUT_MS, modelTimeoutOption, parseCommandOptions, requireModel, requireProvider } from './command-support';
+import { modelTimeoutOption, parseCommandOptions, requireModel, requireProvider } from './command-support';
 import { findModel, loadModels, saveModels } from './model-store';
 import { setupBaseUrl, setupChoice, setupInteractive, setupPrompt, setupProvider, setupValue } from './setup';
 
@@ -98,7 +99,7 @@ export async function runUpdate(argv: string[]): Promise<void> {
   }
   if (editProvider) {
     newBaseUrl ??= await setupPrompt('API base URL', provider.baseUrl, setupBaseUrl);
-    const currentTimeout = provider.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const currentTimeout = provider.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS;
     timeoutMs ??= Number(await setupPrompt('Timeout (ms)', String(currentTimeout), (value) => String(modelTimeoutOption(value))));
     if (apiKey === undefined) {
       apiKey = (await promptHidden('New API key (Enter to keep current): ')).trim() || undefined;

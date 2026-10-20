@@ -1,8 +1,5 @@
+import { MAX_ENCODED_IMAGE_BYTES, MAX_IMAGE_BYTES } from '../limit';
 import { MediaUnavailableError } from './media';
-
-/** Bounds decoded image data before it can enter a model request. */
-export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-export const MAX_ENCODED_IMAGE_BYTES = 4 * Math.ceil(MAX_IMAGE_BYTES / 3);
 
 /** A terminal media failure that should not be retried. */
 export class ImageUnavailableError extends MediaUnavailableError {}
@@ -11,7 +8,7 @@ export class ImageUnavailableError extends MediaUnavailableError {}
 export function imageDataUrl(data: string): string {
   if (!data || data.length > MAX_ENCODED_IMAGE_BYTES || data.length % 4 !== 0 ||
     !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
-    throw new Error('Image must contain valid base64 data no larger than 5 MiB.');
+    throw new Error(`Image must contain valid base64 data no larger than ${MAX_IMAGE_BYTES / (1024 * 1024)} MiB.`);
   }
   const bytes = Buffer.from(data, 'base64');
   if (bytes.length > MAX_IMAGE_BYTES || bytes.toString('base64') !== data) {

@@ -1,3 +1,4 @@
+import { DEFAULT_MODEL_TIMEOUT_MS } from '../limit';
 import { getModelApiKey } from './credentials';
 import {
   CliError,
@@ -8,17 +9,12 @@ import {
   promptHidden
 } from './cli-support';
 import { findModel, findProvider, getModelsPath, loadModels, ModelEntry, ModelsFile, ProviderConfig } from './model-store';
-import { DEFAULT_MODEL_TIMEOUT_MS, resolveModelTimeoutMs } from './responses-client';
+import { resolveModelTimeoutMs } from './responses-client';
 
 /**
  * Default prompt used by `test` when --prompt is not supplied.
  */
 export const DEFAULT_PROMPT = 'Say hello in one short sentence.';
-
-/**
- * Default request timeout in milliseconds.
- */
-export const DEFAULT_TIMEOUT_MS = DEFAULT_MODEL_TIMEOUT_MS;
 
 const COMMON_VALUE_FLAGS: Record<string, string> = {
   '--config_dir': 'configDir',
@@ -78,7 +74,7 @@ export function requireModel(provider: ProviderConfig, name: string): ModelEntry
  */
 export function modelTimeoutOption(
   value: string | undefined,
-  fallback: number = DEFAULT_TIMEOUT_MS
+  fallback: number = DEFAULT_MODEL_TIMEOUT_MS
 ): number {
   try {
     return resolveModelTimeoutMs(value === undefined ? fallback : Number(value));

@@ -1,3 +1,4 @@
+import { MAX_WEB_DECODED_BYTES, MAX_WEB_DOWNLOAD_BYTES, MAX_WEB_REDIRECTS, WEB_REQUEST_TIMEOUT_MS } from '../limit';
 import { lookup } from 'node:dns';
 import { request as httpRequest, RequestOptions } from 'node:http';
 import { request as httpsRequest } from 'node:https';
@@ -122,8 +123,8 @@ function download(url: URL, signal: AbortSignal): Promise<Download> {
       let transferred = 0;
       response.on('data', (chunk: Buffer) => {
         transferred += chunk.length;
-        if (transferred > 1_048_576) {
-          fail(new Error('Page exceeds the 1 MiB download limit.'));
+        if (transferred > MAX_WEB_DOWNLOAD_BYTES) {
+          fail(new Error(`Page exceeds the ${MAX_WEB_DOWNLOAD_BYTES / (1024 * 1024)} MiB download limit.`));
         }
       });
       response.on('error', fail);
@@ -132,8 +133,8 @@ function download(url: URL, signal: AbortSignal): Promise<Download> {
       let size = 0;
       body.on('data', (chunk: Buffer) => {
         size += chunk.length;
-        if (size > 1_048_576) {
-          fail(new Error('Page exceeds the 1 MiB decoded size limit.'));
+        if (size > MAX_WEB_DECODED_BYTES) {
+          fail(new Error(`Page exceeds the ${MAX_WEB_DECODED_BYTES / (1024 * 1024)} MiB decoded size limit.`));
         } else {
           chunks.push(chunk);
         }
@@ -154,10 +155,10 @@ export async function readPublicPage(value: string, signal?: AbortSignal): Promi
   if (signal?.aborted) {
     controller.abort();
   }
-  const timer = setTimeout(cancel, 15_000);
+  const timer = setTimeout(cancel, WEB_REQUEST_TIMEOUT_MS);
   try {
     let url = publicUrl(value);
-    for (let redirects = 0; redirects <= 5; redirects += 1) {
+    for (let redirects = 0; redirects <= MAX_WEB_REDIRECTS; redirects += 1) {
       const result = await download(url, controller.signal);
       if (result.location !== undefined) {
         url = publicUrl(new URL(result.location, url).toString());

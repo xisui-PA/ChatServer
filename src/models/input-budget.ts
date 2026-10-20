@@ -1,16 +1,10 @@
+import { IMAGE_TOKEN_RESERVE, MODEL_INPUT_TOKENS, TRUNCATION_MARKER_TOKENS } from '../limit';
 import { ResponseItem } from './responses-client';
 import { countTokens, limitTextTokens } from './tokens';
 
-/** Application budgets; image estimates are independent of provider billing. */
-export const CONVERSATION_TEXT_TOKENS = 8_000;
-export const MESSAGER_CONTEXT_TOKENS = 2_000;
-export const MODEL_INPUT_TOKENS = 64_000;
-export const TOOL_RESULT_TOKENS = 8_000;
-const IMAGE_TOKEN_RESERVE = 2_048;
-
 /** Truncates text without breaking Unicode and explicitly marks lost context. */
 export function boundedText(text: string, tokens: number): string {
-  return countTokens(text) <= tokens ? text : `${limitTextTokens(text, Math.max(1, tokens - 8))}\n[truncated]`;
+  return countTokens(text) <= tokens ? text : `${limitTextTokens(text, Math.max(1, tokens - TRUNCATION_MARKER_TOKENS))}\n[truncated]`;
 }
 
 /** Counts serialized text and reserves space for native image parts, excluding base64. */

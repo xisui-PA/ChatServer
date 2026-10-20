@@ -1,12 +1,21 @@
+import {
+  CONVERSATION_ID_TOKENS,
+  CONVERSATION_METADATA_TOKENS,
+  CONVERSATION_TEXT_TOKENS,
+  MAX_IMAGES_PER_SNAPSHOT,
+  MAX_MEDIA_ATTEMPTS,
+  MAX_MEMORY_TOKEN_LIMIT,
+  MAX_MESSAGES_PER_SNAPSHOT,
+  MESSAGER_CONTEXT_TOKENS,
+  MESSAGE_TEXT_TOKENS,
+  MIN_MESSAGE_TEXT_TOKENS
+} from '../limit';
 import { IncomingImage, IncomingMessage } from '../messagers/interface';
 import { ImageUnavailableError } from '../messagers/images';
 import { ResponseItem } from './responses-client';
-import { boundedText, CONVERSATION_TEXT_TOKENS, MESSAGER_CONTEXT_TOKENS } from './input-budget';
+import { boundedText } from './input-budget';
 import { countTokens } from './tokens';
 import { PendingMediaError } from './pending-media';
-
-export const MAX_IMAGES_PER_SNAPSHOT = 4;
-const MAX_MEDIA_ATTEMPTS = 3;
 
 /** Defers this snapshot before any model request or delivery. */
 export class PendingImagesError extends PendingMediaError {
@@ -21,18 +30,18 @@ const inputs = new WeakMap<IncomingMessage, Promise<string | readonly ResponseIt
 
 /** Bounds serialized JSON, preserving recent messages and valid structure. */
 function boundedSnapshot(message: IncomingMessage): Record<string, unknown>[] {
-  const sources = (message.messages ?? [message]).slice(-30);
+  const sources = (message.messages ?? [message]).slice(-MAX_MESSAGES_PER_SNAPSHOT);
   const messages = sources.map((source) => ({
-    id: source.id ?? '', senderId: boundedText(source.senderId, 100),
+    id: source.id ?? '', senderId: boundedText(source.senderId, CONVERSATION_ID_TOKENS),
     timestamp: source.timestamp, isSelf: source.isSelf === true,
-    text: boundedText(source.text, 2_000),
+    text: boundedText(source.text, MESSAGE_TEXT_TOKENS),
     images: source.images?.slice(-MAX_IMAGES_PER_SNAPSHOT).map((image) => ({ id: image.id }))
   }));
-  while (countTokens(JSON.stringify(messages)) > CONVERSATION_TEXT_TOKENS - 1_500) {
+  while (countTokens(JSON.stringify(messages)) > CONVERSATION_TEXT_TOKENS - CONVERSATION_METADATA_TOKENS) {
     if (messages.length > 1) {
       messages.shift();
     } else {
-      messages[0].text = boundedText(messages[0].text, 500);
+      messages[0].text = boundedText(messages[0].text, MIN_MESSAGE_TEXT_TOKENS);
       break;
     }
   }
@@ -119,16 +128,20 @@ async function buildInput(message: IncomingMessage, signal?: AbortSignal): Promi
     throw new PendingImagesError();
   }
   const conversation = {
-    channel: boundedText(message.channel ?? message.senderId, 100),
-    messages, memory: message.memory, currentTimestamp: new Date().toISOString()
+    channel: boundedText(message.channel ?? message.senderId, CONVERSATION_ID_TOKENS),
+    messages, currentTimestamp: new Date().toISOString()
   };
   if (countTokens(JSON.stringify(conversation)) > CONVERSATION_TEXT_TOKENS) {
     throw new Error('Conversation metadata exceeds the text input budget.');
   }
+  if (message.memory !== undefined && countTokens(JSON.stringify(message.memory)) > MAX_MEMORY_TOKEN_LIMIT) {
+    throw new Error('Conversation memory exceeds the memory input budget.');
+  }
   const context = message.additionalContext?.trim();
-  const text = JSON.stringify(context ? {
-    ...conversation, additionalContext: boundedText(context, MESSAGER_CONTEXT_TOKENS)
-  } : conversation);
+  const text = JSON.stringify({
+    ...conversation, memory: message.memory,
+    ...(context ? { additionalContext: boundedText(context, MESSAGER_CONTEXT_TOKENS) } : {})
+  });
   return parts.length === 0 ? text : [{ role: 'user', content: [{ type: 'input_text', text }, ...parts] }];
 }
 

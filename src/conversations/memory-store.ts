@@ -1,12 +1,19 @@
+import {
+  DEFAULT_MEMORY_TOKEN_LIMIT,
+  MAX_MEMORY_FILE_BYTES,
+  MAX_MEMORY_ID_CHARS,
+  MAX_MEMORY_TOKEN_LIMIT,
+  MEMORY_CLEANUP_INTERVAL_MS,
+  MEMORY_NOTE_TOKENS,
+  MEMORY_RETENTION_MS,
+  MIN_MEMORY_TOKEN_LIMIT
+} from '../limit';
 import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ConversationMessage, OutgoingMessage } from '../messagers/interface';
 import { countTokens, limitTextTokens } from '../models/tokens';
 import { ConversationMemory, MemoryNote, MemoryNoteKind, MemoryUpdates, SentReply } from './interface';
-
-export const MEMORY_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
-export const MEMORY_TOKEN_LIMIT = 1000;
 
 interface MemoryFile extends ConversationMemory {
   version: 1;
@@ -27,7 +34,7 @@ function parseFile(value: unknown): ConversationMemory {
     throw new Error('Expected a version 1 conversation memory file.');
   }
   const notes = value.notes.map((note: unknown): MemoryNote => {
-    if (!isRecord(note) || typeof note.id !== 'string' || note.id.length > 128 ||
+    if (!isRecord(note) || typeof note.id !== 'string' || note.id.length > MAX_MEMORY_ID_CHARS ||
       typeof note.kind !== 'string' || !['summary', 'fact', 'question', 'inference'].includes(note.kind) ||
       typeof note.text !== 'string' || !isTimestamp(note.sourceTimestamp)) {
       throw new Error('Invalid stored memory note.');
@@ -41,7 +48,7 @@ function parseFile(value: unknown): ConversationMemory {
     };
   });
   const replies = value.replies.map((reply: unknown): SentReply => {
-    if (!isRecord(reply) || typeof reply.id !== 'string' || reply.id.length > 128 ||
+    if (!isRecord(reply) || typeof reply.id !== 'string' || reply.id.length > MAX_MEMORY_ID_CHARS ||
       typeof reply.text !== 'string' || !isTimestamp(reply.sentAt) ||
       (reply.channel !== undefined && typeof reply.channel !== 'string') ||
       (reply.direct !== undefined && typeof reply.direct !== 'boolean')) {
@@ -60,14 +67,14 @@ function parseFile(value: unknown): ConversationMemory {
 }
 
 /** Removes expired entries, then evicts oldest context to meet the shared budget. */
-function prune(memory: ConversationMemory, now: number): ConversationMemory {
+function prune(memory: ConversationMemory, now: number, tokenLimit: number): ConversationMemory {
   const notes = memory.notes.filter((note) =>
     Date.parse(note.sourceTimestamp) <= now && Date.parse(note.expiresAt) > now);
   const replies = memory.replies.filter((reply) =>
     Date.parse(reply.sentAt) <= now && Date.parse(reply.expiresAt) > now);
   notes.sort((a, b) => Date.parse(a.sourceTimestamp) - Date.parse(b.sourceTimestamp));
   replies.sort((a, b) => Date.parse(a.sentAt) - Date.parse(b.sentAt));
-  while (countTokens(JSON.stringify({ notes, replies })) > MEMORY_TOKEN_LIMIT) {
+  while (countTokens(JSON.stringify({ notes, replies })) > tokenLimit) {
     if (notes.length > 0 && (replies.length === 0 ||
       Date.parse(notes[0].sourceTimestamp) <= Date.parse(replies[0].sentAt))) {
       notes.shift();
@@ -85,6 +92,7 @@ export class ConversationMemoryStore {
   private readonly directory: string;
   private operations: Promise<void> = Promise.resolve();
   private timer?: ReturnType<typeof setInterval>;
+  private readonly tokenLimits = new Map<string, number>();
 
   public constructor(configDir: string) {
     this.directory = path.join(configDir, 'conversations');
@@ -96,7 +104,7 @@ export class ConversationMemoryStore {
     await this.cleanup();
     this.timer = setInterval(() => {
       void this.cleanup().catch((error: unknown) => console.error('[memory] cleanup failed:', error));
-    }, 60 * 60 * 1000);
+    }, MEMORY_CLEANUP_INTERVAL_MS);
     this.timer.unref();
   }
 
@@ -106,11 +114,11 @@ export class ConversationMemoryStore {
   }
 
   /** Loads and prunes context before any model can see it. */
-  public load(key: string): Promise<ConversationMemory> {
+  public load(key: string, tokenLimit = DEFAULT_MEMORY_TOKEN_LIMIT): Promise<ConversationMemory> {
     return this.run(async () => {
-      const filePath = this.filePath(key);
+      const filePath = this.registerLimit(key, tokenLimit);
       const previous = await this.read(filePath);
-      const memory = prune(previous, Date.now());
+      const memory = prune(previous, Date.now(), tokenLimit);
       if (JSON.stringify(memory) !== JSON.stringify(previous)) {
         await this.write(filePath, memory);
       }
@@ -119,11 +127,11 @@ export class ConversationMemoryStore {
   }
 
   /** Applies model proposals while deriving every expiry from validated sources. */
-  public update(key: string, updates: MemoryUpdates, messages: readonly ConversationMessage[]): Promise<void> {
+  public update(key: string, updates: MemoryUpdates, messages: readonly ConversationMessage[], tokenLimit = DEFAULT_MEMORY_TOKEN_LIMIT): Promise<void> {
     return this.run(async () => {
       const now = Date.now();
-      const filePath = this.filePath(key);
-      const memory = prune(await this.read(filePath), now);
+      const filePath = this.registerLimit(key, tokenLimit);
+      const memory = prune(await this.read(filePath), now, tokenLimit);
       const sources = new Map<string, number>();
       for (const note of memory.notes) {
         sources.set(note.id, Date.parse(note.sourceTimestamp));
@@ -148,7 +156,7 @@ export class ConversationMemoryStore {
         if (sourceTime + MEMORY_RETENTION_MS <= now) {
           continue;
         }
-        const text = limitTextTokens(proposal.text, 300);
+        const text = limitTextTokens(proposal.text, MEMORY_NOTE_TOKENS);
         const duplicate = notes.find((note) => note.kind === proposal.kind && note.text === text) ??
           memory.notes.find((note) => note.kind === proposal.kind && note.text === text);
         // Repeated snapshots cannot refresh an identical note's original age.
@@ -167,16 +175,16 @@ export class ConversationMemoryStore {
           notes.push(note);
         }
       }
-      await this.write(filePath, prune({ notes, replies: memory.replies }, now));
+      await this.write(filePath, prune({ notes, replies: memory.replies }, now, tokenLimit));
     });
   }
 
   /** Called only after the adapter confirms successful delivery. */
-  public recordReply(key: string, reply: OutgoingMessage): Promise<void> {
+  public recordReply(key: string, reply: OutgoingMessage, tokenLimit = DEFAULT_MEMORY_TOKEN_LIMIT): Promise<void> {
     return this.run(async () => {
       const now = Date.now();
-      const filePath = this.filePath(key);
-      const memory = prune(await this.read(filePath), now);
+      const filePath = this.registerLimit(key, tokenLimit);
+      const memory = prune(await this.read(filePath), now, tokenLimit);
       const sent: SentReply = {
         id: `reply:${randomUUID()}`,
         text: reply.text,
@@ -185,12 +193,22 @@ export class ConversationMemoryStore {
         channel: reply.channel,
         direct: reply.direct
       };
-      await this.write(filePath, prune({ notes: memory.notes, replies: [...memory.replies, sent] }, now));
+      await this.write(filePath, prune({ notes: memory.notes, replies: [...memory.replies, sent] }, now, tokenLimit));
     });
   }
 
   private filePath(key: string): string {
     return path.join(this.directory, `${createHash('sha256').update(key).digest('hex')}.json`);
+  }
+
+  /** Runtime conversation identity selects its pipeline's budget, not a global limit. */
+  private registerLimit(key: string, tokenLimit: number): string {
+    if (!Number.isInteger(tokenLimit) || tokenLimit < MIN_MEMORY_TOKEN_LIMIT || tokenLimit > MAX_MEMORY_TOKEN_LIMIT) {
+      throw new RangeError(`Memory token limit must be between ${MIN_MEMORY_TOKEN_LIMIT} and ${MAX_MEMORY_TOKEN_LIMIT}.`);
+    }
+    const filePath = this.filePath(key);
+    this.tokenLimits.set(filePath, tokenLimit);
+    return filePath;
   }
 
   private run<T>(operation: () => Promise<T>): Promise<T> {
@@ -202,8 +220,8 @@ export class ConversationMemoryStore {
   private async read(filePath: string): Promise<ConversationMemory> {
     try {
       const stat = await fs.stat(filePath);
-      if (stat.size > 256 * 1024) {
-        throw new Error('Conversation memory file exceeds 256 KiB.');
+      if (stat.size > MAX_MEMORY_FILE_BYTES) {
+        throw new Error(`Conversation memory file exceeds ${MAX_MEMORY_FILE_BYTES / 1024} KiB.`);
       }
       return parseFile(JSON.parse(await fs.readFile(filePath, 'utf8')) as unknown);
     } catch (error) {
@@ -238,7 +256,9 @@ export class ConversationMemoryStore {
           const filePath = path.join(this.directory, entry.name);
           try {
             const previous = await this.read(filePath);
-            const memory = prune(previous, Date.now());
+            // Hashed filenames do not reveal their pipeline before the first turn.
+            // Preserve larger memories at startup; enforce the owning limit on load.
+            const memory = prune(previous, Date.now(), this.tokenLimits.get(filePath) ?? MAX_MEMORY_TOKEN_LIMIT);
             if ((memory.notes.length === 0 && memory.replies.length === 0) ||
               JSON.stringify(memory) !== JSON.stringify(previous)) {
               await this.write(filePath, memory);

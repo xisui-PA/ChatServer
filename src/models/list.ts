@@ -1,5 +1,6 @@
+import { DEFAULT_MODEL_TIMEOUT_MS } from '../limit';
 import { hasFlag, optionalValue, resolveConfigDir } from './cli-support';
-import { DEFAULT_TIMEOUT_MS, parseCommandOptions } from './command-support';
+import { parseCommandOptions } from './command-support';
 import { getModelsPath, loadModels } from './model-store';
 
 /**
@@ -60,7 +61,7 @@ export async function runList(argv: string[]): Promise<void> {
       console.log(
         `${provider.provider.padEnd(PROVIDER_COLUMN_WIDTH)}${'(no models)'.padEnd(NAME_COLUMN_WIDTH)}` +
           `${''.padEnd(MODEL_ID_COLUMN_WIDTH)}` +
-          `${String(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS).padEnd(TIMEOUT_COLUMN_WIDTH)}${provider.baseUrl}`
+          `${String(provider.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS).padEnd(TIMEOUT_COLUMN_WIDTH)}${provider.baseUrl}`
       );
       continue;
     }
@@ -71,7 +72,7 @@ export async function runList(argv: string[]): Promise<void> {
         `${provider.provider.padEnd(PROVIDER_COLUMN_WIDTH)}` +
           `${model.name.padEnd(NAME_COLUMN_WIDTH)}` +
           `${model.id.padEnd(MODEL_ID_COLUMN_WIDTH)}` +
-          `${String(provider.timeoutMs ?? DEFAULT_TIMEOUT_MS).padEnd(TIMEOUT_COLUMN_WIDTH)}${provider.baseUrl}`
+          `${String(provider.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS).padEnd(TIMEOUT_COLUMN_WIDTH)}${provider.baseUrl}`
       );
     }
   }

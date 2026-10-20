@@ -93,6 +93,13 @@
         "replier": {
           "$ref": "#/definitions/modelReference"
         },
+        "memoryTokenLimit": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 16000,
+          "default": 1000,
+          "description": "Per-conversation token budget for this pipeline's memory notes and confirmed replies, including their compact JSON metadata. Oldest entries are removed first; three-day retention still applies."
+        },
         "persona": {
           "description": "Optional replier identity, tone, and style. Omit for the default helpful assistant. Applies only to the replier; output-format and reply-length requirements still apply.",
           "allOf": [{ "$ref": "#/definitions/nonEmptyString" }],

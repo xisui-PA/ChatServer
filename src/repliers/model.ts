@@ -1,8 +1,19 @@
+import {
+  DEFAULT_MEMORY_TOKEN_LIMIT,
+  HARD_REPLY_TOKEN_LIMIT,
+  MAX_MEMORY_FORGET_IDS,
+  MAX_MEMORY_ID_CHARS,
+  MAX_MEMORY_NOTES_PER_UPDATE,
+  MAX_MEMORY_NOTE_CHARS,
+  MAX_MEMORY_SOURCE_IDS,
+  MEMORY_RETENTION_MS,
+  SOFT_REPLY_TOKEN_LIMIT
+} from '../limit';
 import { FilterOutcome } from '../filters/interface';
 import { TextModel } from '../models/runtime';
 import { Replier, ReplierResult } from './interface';
 import { parseMemoryUpdates } from '../conversations/interface';
-import { HARD_REPLY_TOKEN_LIMIT, SOFT_REPLY_TOKEN_LIMIT, limitReplyText } from './limits';
+import { limitReplyText } from './limits';
 import { Tool } from '../tools/interface';
 import { IncomingMessage } from '../messagers/interface';
 import { createConversationInput } from '../models/conversation-input';
@@ -11,8 +22,8 @@ import { createConversationInput } from '../models/conversation-input';
 const REPLY_FORMAT_INSTRUCTIONS = [
   'Return only JSON, without fences: {"reply":true,"text":"Hello!","memoryUpdates":{"notes":[],"forget":[]}}. reply must be boolean; text must be the nonempty outgoing message when true, or "" when false.',
   'Always include memoryUpdates.notes and memoryUpdates.forget arrays ([] if unchanged), even when silent. These updates are internal; do not copy them into text.',
-  'Each note needs kind (exactly "summary", "fact", "question", or "inference"), text (1–4000 characters, not whitespace), and sourceIds (1–64 nonempty ID strings, each at most 128 characters). Maximum 20 notes per turn.',
-  'forget contains up to 50 existing note IDs (strings, at most 128 characters each).'
+  `Each note needs kind (exactly "summary", "fact", "question", or "inference"), text (1–${MAX_MEMORY_NOTE_CHARS} characters, not whitespace), and sourceIds (1–${MAX_MEMORY_SOURCE_IDS} nonempty ID strings, each at most ${MAX_MEMORY_ID_CHARS} characters). Maximum ${MAX_MEMORY_NOTES_PER_UPDATE} notes per turn.`,
+  `forget contains up to ${MAX_MEMORY_FORGET_IDS} existing note IDs (strings, at most ${MAX_MEMORY_ID_CHARS} characters each).`
 ].join('\n');
 
 /** Generates text replies and decides whether to respond when filters abstain. */
@@ -20,7 +31,8 @@ export class ModelReplier implements Replier {
   public constructor(
     private readonly model: TextModel,
     private readonly tools: readonly Tool[] = [],
-    private readonly persona?: string
+    private readonly persona?: string,
+    private readonly memoryTokenLimit = DEFAULT_MEMORY_TOKEN_LIMIT
   ) {}
 
   public async replyTo(
@@ -47,7 +59,7 @@ export class ModelReplier implements Replier {
       'Use tools for current facts, page content, arithmetic, or time before returning final JSON. Report tool failures briefly and honestly.',
       'Include citations only when the sender explicitly asks for sources, references, citations, or supporting links. Otherwise omit source attributions, footnotes, reference lists, and source URLs from text, even after using web tools. Internal memory sourceIds are still required and never belong in the public reply.',
       REPLY_FORMAT_INSTRUCTIONS,
-      'Keep concise, nonduplicative summaries, sender-attributed facts, unresolved questions, and labeled inferences; omit speculation and trivial details. Memory has a separate budget of about 1000 tokens and expires three days after its earliest original source.',
+      `Keep concise, nonduplicative summaries, sender-attributed facts, unresolved questions, and labeled inferences; omit speculation and trivial details. Memory notes and confirmed replies share a separate budget of ${this.memoryTokenLimit} tokens, including metadata, and expire ${MEMORY_RETENTION_MS / (24 * 60 * 60 * 1000)} days after their earliest original source. Summarize or forget older notes to leave space for new context.`,
       'In memory sourceIds, record supporting snapshot message IDs or existing memory note/reply IDs. Reuse old note IDs when summarizing; never use unrelated newer messages to refresh old facts.',
       'Forget notes that are resolved, contradicted, or summarized; leave others unchanged. Only the application records successful delivery in memory.replies; never claim your proposed reply was sent.',
       outcome === FilterOutcome.Allowed

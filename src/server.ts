@@ -1,3 +1,12 @@
+import {
+  DEFAULT_MEMORY_TOKEN_LIMIT,
+  MAX_MESSAGES_PER_SNAPSHOT,
+  MAX_PENDING_MEDIA_RETRIES,
+  MAX_REPLY_DELAY_MS,
+  MEMORY_RETENTION_MS,
+  MIN_REPLY_DELAY_MS,
+  PENDING_MEDIA_RETRY_DELAY_MS
+} from './limit';
 import { randomInt, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ChatServerOptions } from './config';
@@ -9,7 +18,7 @@ import { Replier } from './repliers/interface';
 import { ModelReplier } from './repliers/model';
 import { ModelRegistry } from './models/runtime';
 import { createTools } from './tools/registry';
-import { ConversationMemoryStore, MEMORY_RETENTION_MS, MEMORY_TOKEN_LIMIT } from './conversations/memory-store';
+import { ConversationMemoryStore } from './conversations/memory-store';
 import { limitReplyText } from './repliers/limits';
 import { ResponsesApiError } from './models/responses-client';
 import { PendingMediaError } from './models/pending-media';
@@ -40,6 +49,7 @@ interface ResolvedChat {
   filters: readonly FilterAdapter[];
   replier: Replier;
   replierModel: string;
+  memoryTokenLimit: number;
   stt?: VoiceTranscriber;
   contextFile?: MessagerContextFile;
 }
@@ -116,13 +126,16 @@ export class ChatServer {
   private buildChats(models: ModelRegistry): ResolvedChat[] {
     return this.options.chats.map((definition, index) => {
       const name = `chat-${index + 1}`;
+      const memoryTokenLimit = definition.messager.memoryTokenLimit ?? DEFAULT_MEMORY_TOKEN_LIMIT;
       return {
         name,
         mainAccount: definition.messager.mainAccount,
         replier: new ModelReplier(
-          models.get(definition.messager.replier), createTools(definition.messager.tools), definition.messager.persona
+          models.get(definition.messager.replier), createTools(definition.messager.tools), definition.messager.persona,
+          memoryTokenLimit
         ),
         replierModel: definition.messager.replier,
+        memoryTokenLimit,
         contextFile: new MessagerContextFile(this.configDir, definition.messager.name),
         stt: definition.stt === undefined ? undefined : new VoiceTranscriber(
           models.getTranscriber(definition.stt.model),
@@ -168,7 +181,7 @@ export class ChatServer {
         }
         this.started.push(chat);
         await chat.messager.start((message) => {
-          // Keep asynchronous source selection in transport order, before the 30-row cap.
+          // Keep asynchronous source selection in transport order, before the snapshot message cap.
           this.ingestion = this.ingestion.then(() => this.receiveMessage(chat, message)).catch((error: unknown) => {
             console.error(`[chat:${chat.name}] failed to receive message:`, error);
           });
@@ -327,7 +340,7 @@ export class ChatServer {
         }
       }
     }
-    conversation.messages = conversation.messages.slice(-30);
+    conversation.messages = conversation.messages.slice(-MAX_MESSAGES_PER_SNAPSHOT);
     if (!conversation.processing && (conversation.hasPendingMessages || conversation.statusRequest !== undefined)) {
       // Updating an existing Map entry preserves its FIFO position.
       this.pending.set(key, conversation);
@@ -358,7 +371,7 @@ export class ChatServer {
   private async processConversations(): Promise<void> {
     while (!this.closed && this.pending.size > 0) {
       if (!this.replySlotReady) {
-        await delay(randomInt(60_000, 180_001), undefined, { signal: this.shutdown.signal });
+        await delay(randomInt(MIN_REPLY_DELAY_MS, MAX_REPLY_DELAY_MS + 1), undefined, { signal: this.shutdown.signal });
         this.replySlotReady = true;
       }
       if (this.closed) {
@@ -445,11 +458,11 @@ export class ChatServer {
 
   /** Retries pending media; model generations manage their own retry policy. */
   private scheduleRetry(key: string, conversation: ConversationState): void {
-    if (conversation.retryAttempts >= 2 || this.closed) {
+    if (conversation.retryAttempts >= MAX_PENDING_MEDIA_RETRIES || this.closed) {
       return;
     }
     conversation.retryAttempts += 1;
-    const wait = 30_000 * 2 ** (conversation.retryAttempts - 1);
+    const wait = PENDING_MEDIA_RETRY_DELAY_MS * 2 ** (conversation.retryAttempts - 1);
     conversation.retryTimer = setTimeout(() => {
       conversation.retryTimer = undefined;
       if (!this.closed && this.conversations.get(key) === conversation) {
@@ -471,7 +484,7 @@ export class ChatServer {
     console.log(`[chat:${chat.name}] processing ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}`);
     message = { ...message, additionalContext: await chat.contextFile?.load() };
     try {
-      message = { ...message, memory: await this.memory.load(memoryKey) };
+      message = { ...message, memory: await this.memory.load(memoryKey, chat.memoryTokenLimit) };
     } catch (error) {
       console.error(`[chat:${chat.name}] failed to load conversation memory:`, error);
       message = { ...message, memory: { notes: [], replies: [] } };
@@ -511,7 +524,7 @@ export class ChatServer {
       return false;
     }
     try {
-      await this.memory.update(memoryKey, result.memoryUpdates, message.messages ?? [message]);
+      await this.memory.update(memoryKey, result.memoryUpdates, message.messages ?? [message], chat.memoryTokenLimit);
     } catch (error) {
       console.error(`[chat:${chat.name}] failed to save conversation notes:`, error);
     }
@@ -529,7 +542,7 @@ export class ChatServer {
     if (await this.deliverReply(chat, message, reply)) {
       // A persistence failure must not turn confirmed delivery into a retry.
       try {
-        await this.memory.recordReply(memoryKey, reply);
+        await this.memory.recordReply(memoryKey, reply, chat.memoryTokenLimit);
       } catch (error) {
         console.error(`[chat:${chat.name}] failed to record delivered reply:`, error);
       }
@@ -558,7 +571,7 @@ export class ChatServer {
       `Deliveries: ${this.deliveries}; failures ${this.deliveryFailures}; last ${age(this.lastDeliveryAt)}`,
       `Adapter: ${chat.messager.name}${health === undefined ? '' : health.active ? ' active' : ' stopped'}; poll failures ${health?.consecutivePollFailures ?? 0}; failed chats ${health?.failedChats ?? 0}`,
       `Last poll: ${age(health?.lastSuccessfulPollAt)}; last poll error: ${age(health?.lastPollErrorAt)}`,
-      `Delay: 1–3m; memory: ${MEMORY_RETENTION_MS / (24 * 60 * 60 * 1000)} days/${MEMORY_TOKEN_LIMIT} tokens`
+      `Delay: ${MIN_REPLY_DELAY_MS / 60_000}–${MAX_REPLY_DELAY_MS / 60_000}m; memory: ${MEMORY_RETENTION_MS / (24 * 60 * 60 * 1000)} days/${chat.memoryTokenLimit} tokens`
     ].join('\n');
     await this.deliverReply(chat, message, { text: limitReplyText(text), direct: true });
   }

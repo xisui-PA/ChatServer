@@ -1,3 +1,10 @@
+import {
+  MAX_MEMORY_FORGET_IDS,
+  MAX_MEMORY_ID_CHARS,
+  MAX_MEMORY_NOTES_PER_UPDATE,
+  MAX_MEMORY_NOTE_CHARS,
+  MAX_MEMORY_SOURCE_IDS
+} from '../limit';
 /** Model-written context, distinguished from confirmed chat delivery history. */
 export type MemoryNoteKind = 'summary' | 'fact' | 'question' | 'inference';
 
@@ -34,19 +41,19 @@ export interface MemoryUpdates {
 /** Validates model output before any memory changes can reach the filesystem. */
 export function parseMemoryUpdates(value: unknown): MemoryUpdates {
   if (typeof value !== 'object' || value === null || Array.isArray(value) ||
-    !('notes' in value) || !Array.isArray(value.notes) || value.notes.length > 20 ||
-    !('forget' in value) || !Array.isArray(value.forget) || value.forget.length > 50 ||
-    !value.forget.every((id: unknown) => typeof id === 'string' && id.length <= 128)) {
+    !('notes' in value) || !Array.isArray(value.notes) || value.notes.length > MAX_MEMORY_NOTES_PER_UPDATE ||
+    !('forget' in value) || !Array.isArray(value.forget) || value.forget.length > MAX_MEMORY_FORGET_IDS ||
+    !value.forget.every((id: unknown) => typeof id === 'string' && id.length <= MAX_MEMORY_ID_CHARS)) {
     throw new Error('Reply model memoryUpdates must contain notes and forget arrays.');
   }
   const notes = value.notes.map((note: unknown) => {
     if (typeof note !== 'object' || note === null || Array.isArray(note) ||
       !('kind' in note) || typeof note.kind !== 'string' ||
       !['summary', 'fact', 'question', 'inference'].includes(note.kind) ||
-      !('text' in note) || typeof note.text !== 'string' || !note.text.trim() || note.text.length > 4000 ||
+      !('text' in note) || typeof note.text !== 'string' || !note.text.trim() || note.text.length > MAX_MEMORY_NOTE_CHARS ||
       !('sourceIds' in note) || !Array.isArray(note.sourceIds) ||
-      note.sourceIds.length === 0 || note.sourceIds.length > 64 ||
-      !note.sourceIds.every((id: unknown) => typeof id === 'string' && id.length > 0 && id.length <= 128)) {
+      note.sourceIds.length === 0 || note.sourceIds.length > MAX_MEMORY_SOURCE_IDS ||
+      !note.sourceIds.every((id: unknown) => typeof id === 'string' && id.length > 0 && id.length <= MAX_MEMORY_ID_CHARS)) {
       throw new Error('Each memory note needs a kind, nonempty text, and valid sourceIds.');
     }
     return {

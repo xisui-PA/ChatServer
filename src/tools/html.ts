@@ -1,3 +1,4 @@
+import { MAX_HTML_NODES, MAX_WEB_TEXT_CHARS, MAX_WEB_TITLE_CHARS } from '../limit';
 import { parseDocument } from 'htmlparser2';
 
 export type HtmlNode = ReturnType<typeof parseDocument>['children'][number];
@@ -6,7 +7,7 @@ export type HtmlNode = ReturnType<typeof parseDocument>['children'][number];
 export function* walkHtml(root: HtmlNode): Generator<HtmlNode> {
   const pending: HtmlNode[] = [root];
   let visited = 0;
-  while (pending.length && visited < 100_000) {
+  while (pending.length && visited < MAX_HTML_NODES) {
     const node = pending.pop();
     if (node === undefined) {
       break;
@@ -22,14 +23,14 @@ export function* walkHtml(root: HtmlNode): Generator<HtmlNode> {
 }
 
 /** Extracts readable text, excluding executable content and navigation. */
-export function htmlText(root: HtmlNode, limit = 20_000): string {
+export function htmlText(root: HtmlNode, limit = MAX_WEB_TEXT_CHARS): string {
   const ignored = new Set(['script', 'style', 'noscript', 'template', 'nav', 'footer', 'header', 'svg']);
   const blocks = new Set(['p', 'div', 'br', 'li', 'h1', 'h2', 'h3', 'h4', 'pre', 'section', 'article', 'tr']);
   const pending: HtmlNode[] = [root];
   const parts: string[] = [];
   let length = 0;
   let visited = 0;
-  while (pending.length && length < limit && visited < 100_000) {
+  while (pending.length && length < limit && visited < MAX_HTML_NODES) {
     const node = pending.pop();
     if (node === undefined) {
       break;
@@ -65,7 +66,7 @@ export function readableHtml(html: string): { title: string; text: string } {
   for (const node of walkHtml(document)) {
     if ('name' in node) {
       if (node.name === 'title') {
-        title = htmlText(node, 500);
+        title = htmlText(node, MAX_WEB_TITLE_CHARS);
       } else if (node.name === 'article' && article === undefined) {
         article = node;
       } else if (node.name === 'main' && main === undefined) {

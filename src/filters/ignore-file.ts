@@ -1,3 +1,4 @@
+import { IGNORE_FILE_RELOAD_INTERVAL_MS } from '../limit';
 import { promises as fsp } from 'node:fs';
 
 /**
@@ -61,7 +62,7 @@ export class IgnoreFile implements SenderIdSource {
 
   public constructor(filePath: string, options: IgnoreFileOptions = {}) {
     this.path = filePath;
-    this.reloadIntervalMs = options.reloadIntervalMs ?? 1000;
+    this.reloadIntervalMs = options.reloadIntervalMs ?? IGNORE_FILE_RELOAD_INTERVAL_MS;
   }
 
   /**
