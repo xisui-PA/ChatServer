@@ -6,7 +6,9 @@ import {
   CommandLineSpec,
   optionalValue,
   parseCommandLine,
-  promptHidden
+  promptHidden,
+  requireValue,
+  resolveConfigDir
 } from './cli-support';
 import { findModel, findProvider, getModelsPath, loadModels, ModelEntry, ModelsFile, ProviderConfig } from './model-store';
 import { resolveModelTimeoutMs } from './responses-client';
@@ -109,4 +111,18 @@ export async function newApiKey(cli: CommandLine, provider: string): Promise<str
  */
 export async function existingApiKey(provider: ProviderConfig): Promise<string> {
   return getModelApiKey(provider.provider);
+}
+
+/** Resolves the same model alias, provider key, and timeout for every model-test command. */
+export async function loadTestModel(cli: CommandLine): Promise<{
+  provider: ProviderConfig; model: ModelEntry; apiKey: string; timeoutMs: number;
+}> {
+  const configDir = resolveConfigDir(optionalValue(cli, 'configDir'));
+  const providerName = requireValue(cli, 'provider', '--provider');
+  const name = requireValue(cli, 'name', '--name');
+  const { provider } = await requireProvider(configDir, providerName);
+  const model = requireModel(provider, name);
+  const timeoutMs = modelTimeoutOption(optionalValue(cli, 'timeout'), provider.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS);
+  const apiKey = await existingApiKey(provider);
+  return { provider, model, apiKey, timeoutMs };
 }

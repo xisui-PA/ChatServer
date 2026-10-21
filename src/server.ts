@@ -24,6 +24,7 @@ import { ResponsesApiError } from './models/responses-client';
 import { PendingMediaError } from './models/pending-media';
 import { VoiceTranscriber } from './models/voice-transcriber';
 import { MessagerContextFile } from './messagers/context-file';
+import { VoiceSynthesizer } from './models/voice-synthesizer';
 
 export * from './filters/interface';
 export * from './filters/ignore-file';
@@ -51,6 +52,7 @@ interface ResolvedChat {
   replierModel: string;
   memoryTokenLimit: number;
   stt?: VoiceTranscriber;
+  tts?: VoiceSynthesizer;
   contextFile?: MessagerContextFile;
 }
 
@@ -132,11 +134,14 @@ export class ChatServer {
         mainAccount: definition.messager.mainAccount,
         replier: new ModelReplier(
           models.get(definition.messager.replier), createTools(definition.messager.tools), definition.messager.persona,
-          memoryTokenLimit
+          memoryTokenLimit, definition.tts !== undefined
         ),
         replierModel: definition.messager.replier,
         memoryTokenLimit,
         contextFile: new MessagerContextFile(this.configDir, definition.messager.name),
+        tts: definition.tts === undefined ? undefined : new VoiceSynthesizer(
+          models.getSynthesizer(definition.tts.model), definition.tts.options
+        ),
         stt: definition.stt === undefined ? undefined : new VoiceTranscriber(
           models.getTranscriber(definition.stt.model),
           definition.stt.model,
@@ -168,6 +173,7 @@ export class ChatServer {
       const references = this.options.chats.flatMap((chat) => [
         chat.messager.replier,
         ...(chat.stt === undefined ? [] : [chat.stt.model]),
+        ...(chat.tts === undefined ? [] : [chat.tts.model]),
         ...chat.filters.flatMap((filter) => filter.model === undefined ? [] : [filter.model])
       ]);
       const models = await ModelRegistry.load(this.configDir, references);
@@ -529,7 +535,7 @@ export class ChatServer {
     } catch (error) {
       console.error(`[chat:${chat.name}] failed to save conversation notes:`, error);
     }
-    const reply = result.reply;
+    let reply = result.reply;
     if (conversation.selfRevision !== selfRevision) {
       throw new SupersededTurnError();
     }
@@ -539,6 +545,18 @@ export class ChatServer {
     if (reply === undefined) {
       console.log(`[chat:${chat.name}] skipped reply to ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}: replier "${chat.replierModel}" chose not to reply`);
       return false;
+    }
+    if (reply.voice) {
+      if (chat.tts === undefined) {
+        throw new Error('Voice reply requested without a configured TTS model.');
+      }
+      reply = { ...reply, audio: await chat.tts.synthesize(reply.text, this.shutdown.signal) };
+      if (conversation.selfRevision !== selfRevision) {
+        throw new SupersededTurnError();
+      }
+      if (this.closed) {
+        return false;
+      }
     }
     if (await this.deliverReply(chat, message, reply)) {
       // A persistence failure must not turn confirmed delivery into a retry.

@@ -70,6 +70,10 @@ export interface IncomingMessage extends ConversationMessage {
 export interface OutgoingMessage {
   /** Message text to deliver. */
   text: string;
+  /** Model-selected voice output; text is the spoken transcript and memory record. */
+  voice?: boolean;
+  /** Synthesized and padded speech, attached by the server before delivery. */
+  audio?: AudioFile;
   /** Optional channel or room to target. */
   channel?: string;
   /**

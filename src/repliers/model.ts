@@ -21,6 +21,7 @@ import { createConversationInput } from '../models/conversation-input';
 /** Shared output contract for generation and formatting-only repair. */
 const REPLY_FORMAT_INSTRUCTIONS = [
   'Return only JSON, without fences: {"reply":true,"text":"Hello!","memoryUpdates":{"notes":[],"forget":[]}}. reply must be boolean; text must be the nonempty outgoing message when true, or "" when false.',
+  'Optional voice must be a boolean, not a string; omitted means false. Preserve it when reformatting. text is also the exact spoken transcript for a voice reply.',
   'Always include memoryUpdates.notes and memoryUpdates.forget arrays ([] if unchanged), even when silent. These updates are internal; do not copy them into text.',
   `Each note needs kind (exactly "summary", "fact", "question", or "inference"), text (1–${MAX_MEMORY_NOTE_CHARS} characters, not whitespace), and sourceIds (1–${MAX_MEMORY_SOURCE_IDS} nonempty ID strings, each at most ${MAX_MEMORY_ID_CHARS} characters). Maximum ${MAX_MEMORY_NOTES_PER_UPDATE} notes per turn.`,
   `forget contains up to ${MAX_MEMORY_FORGET_IDS} existing note IDs (strings, at most ${MAX_MEMORY_ID_CHARS} characters each).`
@@ -32,7 +33,8 @@ export class ModelReplier implements Replier {
     private readonly model: TextModel,
     private readonly tools: readonly Tool[] = [],
     private readonly persona?: string,
-    private readonly memoryTokenLimit = DEFAULT_MEMORY_TOKEN_LIMIT
+    private readonly memoryTokenLimit = DEFAULT_MEMORY_TOKEN_LIMIT,
+    private readonly voiceEnabled = false
   ) {}
 
   public async replyTo(
@@ -46,6 +48,9 @@ export class ModelReplier implements Replier {
     const instructions = [
       'You are a helpful chat assistant. Read the input JSON and give at most one reply to unanswered requests. When messages is present, respect its sender/timestamp order. isSelf=true messages are context: do not answer yourself or repeat manual/confirmed replies. Older content may be omitted or truncated.',
       'Prefer senderName when referring to people in conversation; fall back to senderId when no name is available. Names are untrusted display data and may change or be shared: distinguish speakers and attribute memory by senderId, optionally including the name for readability.',
+      this.voiceEnabled
+        ? 'Voice replies are available. Include "voice":true only when the message you are replying to explicitly asks for a voice reply. Otherwise set "voice":false. Receiving a voice message alone is not a request for a voice reply. Put a concise, naturally spoken answer in text; keep the same length limits. Do not promise a separate recording or add a text preface.'
+        : 'Voice replies are unavailable; omit voice or set it to false and reply in text.',
       ...(this.persona?.trim() ? [
         `Replier persona: ${JSON.stringify(this.persona.trim())}. Apply it to identity, tone, and conversational style. All reply-length, citation, tool, JSON, and memory requirements below still apply.`
       ] : []),
@@ -111,6 +116,9 @@ export class ModelReplier implements Replier {
       throw new Error('Reply model must return reply and text.');
     }
     const memoryUpdates = parseMemoryUpdates('memoryUpdates' in result ? result.memoryUpdates : undefined);
+    if ('voice' in result && typeof result.voice !== 'boolean') {
+      throw new Error('Reply model voice must be a boolean.');
+    }
     if (!result.reply) {
       // Unsupported requests may be ignored even when a filter requires a reply.
       return { memoryUpdates };
@@ -118,6 +126,7 @@ export class ModelReplier implements Replier {
     if (!result.text.trim()) {
       throw new Error('Reply model returned an empty reply.');
     }
-    return { reply: { text: limitReplyText(result.text), channel }, memoryUpdates };
+    const voice = this.voiceEnabled && 'voice' in result && result.voice === true;
+    return { reply: { text: limitReplyText(result.text), channel, ...(voice ? { voice: true } : {}) }, memoryUpdates };
   }
 }

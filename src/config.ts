@@ -43,6 +43,13 @@ export interface SttSpec {
   audioConversionCmd?: string;
 }
 
+/** Text-to-speech provider and speech-endpoint options for one chat pipeline. */
+export interface TtsSpec {
+  type: 'model';
+  model: string;
+  options?: Readonly<Record<string, unknown>>;
+}
+
 /**
  * One chat pipeline: a messager plus the filters applied to inbound messages.
  */
@@ -51,6 +58,8 @@ export interface ChatDefinition {
   messager: MessagerSpec;
   /** Optional speech-to-text configuration. Omit to ignore voice input. */
   stt?: SttSpec;
+  /** Optional speech synthesis, used only for explicitly requested voice replies. */
+  tts?: TtsSpec;
   /** Filters deciding whether a message should be replied to. */
   filters: readonly FilterSpec[];
 }
@@ -272,6 +281,25 @@ function parseSttSpec(value: unknown, where: string): SttSpec {
   return { type: 'model', model, audioConversionCmd: (value.audioConversionCmd as string | undefined)?.trim() };
 }
 
+/** Keeps application-controlled speech fields out of provider-specific options. */
+function parseTtsSpec(value: unknown, where: string): TtsSpec {
+  if (!isPlainObject(value) || value.type !== 'model') {
+    throw new ConfigError(`${where} must be an object with type "model".`);
+  }
+  warnUnknownKeys(value, ['type', 'model', 'options'], where);
+  const model = modelReference(value.model, `${where}.model`);
+  const options = value.options === undefined ? {} : value.options;
+  if (!isPlainObject(options)) {
+    throw new ConfigError(`${where}.options must be an object.`);
+  }
+  for (const key of ['model', 'input', 'response_format', 'stream_format']) {
+    if (Object.hasOwn(options, key)) {
+      throw new ConfigError(`${where}.options.${key} is controlled by ChatServer.`);
+    }
+  }
+  return { type: 'model', model, options };
+}
+
 /**
  * Validates one entry of the `chats` array.
  */
@@ -282,7 +310,7 @@ function parseChat(value: unknown, index: number): ChatDefinition {
     throw new ConfigError(`${where} must be an object.`);
   }
 
-  warnUnknownKeys(value, ['messager', 'filters', 'stt'], where);
+  warnUnknownKeys(value, ['messager', 'filters', 'stt', 'tts'], where);
 
   const messager = parseMessagerSpec(value.messager, `${where}.messager`);
 
@@ -296,7 +324,8 @@ function parseChat(value: unknown, index: number): ChatDefinition {
   );
 
   const stt = value.stt === undefined ? undefined : parseSttSpec(value.stt, `${where}.stt`);
-  return { messager, filters, stt };
+  const tts = value.tts === undefined ? undefined : parseTtsSpec(value.tts, `${where}.tts`);
+  return { messager, filters, stt, tts };
 }
 
 /**

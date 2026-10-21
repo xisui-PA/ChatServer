@@ -94,6 +94,18 @@ export const AUDIO_CONVERSION_STDERR_CHARS = 8_192;
 export const AUDIO_CLEANUP_RETRIES = 3;
 /** Delay between retries deleting conversion temporary files. */
 export const AUDIO_CLEANUP_RETRY_DELAY_MS = 100;
+/** Minimum independently sampled silence before and after a synthesized reply. */
+export const MIN_VOICE_PADDING_MS = 500;
+/** Inclusive maximum independently sampled silence at each end of a voice reply. */
+export const MAX_VOICE_PADDING_MS = 2_000;
+/** Maximum characters submitted to a speech synthesis endpoint. */
+export const MAX_TTS_INPUT_CHARS = 4_096;
+/** Maximum wait for a WeChat voice job to confirm delivery. */
+export const WECHAT_VOICE_JOB_TIMEOUT_MS = 180_000;
+/** Interval between status checks of a submitted WeChat voice job. */
+export const WECHAT_VOICE_JOB_POLL_MS = 1_000;
+/** Deadline for a best-effort voice-job cancellation after failure or shutdown. */
+export const WECHAT_VOICE_CANCEL_TIMEOUT_MS = 5_000;
 
 // Model requests, pacing, and transport defaults.
 /** Largest duration supported by Node timers; a platform bound. */

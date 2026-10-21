@@ -9,6 +9,7 @@ import { assertInputBudget, boundedText, modelInputTokens } from './input-budget
 import { withModelRetries } from './retry';
 import { AudioFile } from '../messagers/interface';
 import { createTranscription, TranscriptionModel } from './transcriptions-client';
+import { createSpeech, SpeechModel } from './speech-client';
 
 /** Per-request generation settings; never mutate a shared model's defaults. */
 export interface GenerationOptions {
@@ -27,7 +28,7 @@ export interface TextModel {
 }
 
 /** A model bound to its provider endpoint and credential. */
-class ProviderModel implements TextModel, TranscriptionModel {
+class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
   public constructor(
     private readonly baseUrl: string,
     private readonly modelId: string,
@@ -40,6 +41,11 @@ class ProviderModel implements TextModel, TranscriptionModel {
       baseUrl: this.baseUrl, model: this.modelId, apiKey: this.apiKey,
       audio, timeoutMs: this.timeoutMs, signal
     }), signal);
+  }
+
+  public synthesize(text: string, options?: Readonly<Record<string, unknown>>, signal?: AbortSignal): Promise<AudioFile> {
+    return withModelRetries(() => createSpeech({ baseUrl: this.baseUrl, model: this.modelId, apiKey: this.apiKey,
+      text, options, timeoutMs: this.timeoutMs, signal }), signal);
   }
 
   public async generate(
@@ -218,6 +224,14 @@ export class ModelRegistry {
     const model = this.models.get(reference);
     if (model === undefined) {
       throw new Error(`STT model "${reference}" has not been loaded.`);
+    }
+    return model;
+  }
+
+  public getSynthesizer(reference: string): SpeechModel {
+    const model = this.models.get(reference);
+    if (model === undefined) {
+      throw new Error(`TTS model "${reference}" has not been loaded.`);
     }
     return model;
   }

@@ -49,6 +49,9 @@
         "stt": {
           "$ref": "#/definitions/stt"
         },
+        "tts": {
+          "$ref": "#/definitions/tts"
+        },
         "filters": {
           "type": "array",
           "description": "Filters evaluated in order. Omit or use [] to delegate to the reply model without running filters.",
@@ -56,6 +59,22 @@
           "items": {
             "$ref": "#/definitions/filter"
           }
+        }
+      }
+    },
+    "tts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "model"],
+      "description": "Optional voice replies through an OpenAI-compatible audio/speech endpoint returning PCM/float WAV audio. Omit to use text replies only.",
+      "properties": {
+        "type": { "const": "model" },
+        "model": { "$ref": "#/definitions/modelReference" },
+        "options": {
+          "type": "object",
+          "description": "Provider speech fields such as voice, speed, instructions, or language. ChatServer controls model, input, response_format=wav, and stream_format=audio.",
+          "propertyNames": { "not": { "enum": ["model", "input", "response_format", "stream_format"] } },
+          "examples": [{ "voice": "alloy", "speed": 1 }]
         }
       }
     },

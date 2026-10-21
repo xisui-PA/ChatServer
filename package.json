@@ -19,6 +19,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "model:add": "node --enable-source-maps dist/models/chatserver-models.js add",
     "model:test": "node --enable-source-maps dist/models/chatserver-models.js test",
+    "model:test-stt": "node --enable-source-maps dist/models/chatserver-models.js test-stt",
+    "model:test-tts": "node --enable-source-maps dist/models/chatserver-models.js test-tts",
     "model:list": "node --enable-source-maps dist/models/chatserver-models.js list",
     "model:update": "node --enable-source-maps dist/models/chatserver-models.js update",
     "model:remove": "node --enable-source-maps dist/models/chatserver-models.js remove",
