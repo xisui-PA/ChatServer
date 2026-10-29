@@ -192,7 +192,7 @@ test('malformed voice selection is logged and repaired with the original output'
   const replier = new ModelReplier({ generate: async (input, _instructions, _signal, options) => {
     if (++calls === 1) { return response('true'); }
     assert.equal(JSON.parse(input).output, response('true'));
-    assert.deepEqual(options.tools, []);
+    assert.deepEqual(options.localTools, []);
     return response(true);
   } }, [], undefined, undefined, true);
   assert.equal((await replier.replyTo(message, FilterOutcome.Optional)).reply.voice, true);
@@ -216,7 +216,7 @@ test('configured TTS receives only reply text and memory records it after confir
     startedSending();
     await gate;
   } }));
-  const server = new ChatServer({ chats: [{ messager: { name: 'tts-fixture', replier: 'chat/model', tools: [] }, filters: [],
+  const server = new ChatServer({ chats: [{ messager: { name: 'tts-fixture', replier: 'chat/model', localTools: [] }, filters: [],
     tts: { type: 'model', model: 'speech/model', options } }] }, dir);
   await server.memory.start();
   t.after(() => server.memory.close());

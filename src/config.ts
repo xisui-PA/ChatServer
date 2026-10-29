@@ -4,7 +4,9 @@ import path from 'node:path';
 import { hasFilter, listFilters } from './filters/registry';
 import { hasMessager, listMessagers } from './messagers/registry';
 import { parseModelReference } from './models/reference';
-import { hasTool, listTools } from './tools/registry';
+import { parseLocalTools } from './tools/registry';
+import { ApiToolDefinition, ApiToolSpec, LocalToolSpec } from './tools/interface';
+import { parseApiTools } from './tools/api';
 
 /** Configuration for a registered messager implementation. */
 export interface MessagerSpec {
@@ -18,8 +20,10 @@ export interface MessagerSpec {
   memoryTokenLimit?: number;
   /** Sender ID authorized to query server status in a direct chat. */
   mainAccount?: string;
-  /** Replier tool names; omitted enables the four built-in tools, [] disables them. */
-  tools?: readonly string[];
+  /** Local names or { type } objects; omitted enables all four built-ins, [] disables them. */
+  localTools?: readonly LocalToolSpec[];
+  /** Hosted type strings or definition objects; omitted or [] disables hosted tools. */
+  apiTools?: readonly ApiToolSpec[];
   /** Options passed to the messager factory. */
   options?: Readonly<Record<string, unknown>>;
 }
@@ -206,7 +210,10 @@ function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
   if (!isPlainObject(value)) {
     throw new ConfigError(`${where} must be an object with "name", "replier", and optional "options".`);
   }
-  warnUnknownKeys(value, ['name', 'replier', 'persona', 'memoryTokenLimit', 'mainAccount', 'tools', 'options'], where);
+  if (Object.hasOwn(value, 'tools')) {
+    throw new ConfigError(`${where}.tools has been replaced by localTools; rename it and use apiTools for provider-hosted tools.`);
+  }
+  warnUnknownKeys(value, ['name', 'replier', 'persona', 'memoryTokenLimit', 'mainAccount', 'localTools', 'apiTools', 'options'], where);
   if (typeof value.name !== 'string' || !value.name.trim()) {
     throw new ConfigError(`${where}: "name" must be a non-empty registered messager name.`);
   }
@@ -235,15 +242,24 @@ function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
   if (!isPlainObject(options)) {
     throw new ConfigError(`${where}: "options" must be an object.`);
   }
-  let tools: string[] | undefined;
-  if (value.tools !== undefined) {
-    if (!Array.isArray(value.tools) || !value.tools.every((tool) => typeof tool === 'string' && hasTool(tool))) {
-      throw new ConfigError(`${where}.tools must be an array of registered tool names. Available: ${listTools().join(', ')}.`);
+  let localTools: string[] | undefined;
+  if (value.localTools !== undefined) {
+    try {
+      localTools = parseLocalTools(value.localTools);
+    } catch (error) {
+      throw new ConfigError(`${where}.${(error as Error).message}`);
     }
-    tools = [...new Set(value.tools as string[])];
+  }
+  let apiTools: ApiToolDefinition[] | undefined;
+  if (value.apiTools !== undefined) {
+    try {
+      apiTools = parseApiTools(value.apiTools);
+    } catch (error) {
+      throw new ConfigError(`${where}.${(error as Error).message}`);
+    }
   }
   return { name, replier: modelReference(value.replier, `${where}.replier`), persona,
-    memoryTokenLimit: memoryTokenLimit as number | undefined, mainAccount, options, tools };
+    memoryTokenLimit: memoryTokenLimit as number | undefined, mainAccount, options, localTools, apiTools };
 }
 
 /** Parses a filter specification and validates its registered name. */

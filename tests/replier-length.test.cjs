@@ -40,7 +40,7 @@ test('oversized English, Chinese, and emoji replies are capped locally without a
     assert.equal(result.reply.channel, 'chat');
     assert.deepEqual(result.memoryUpdates, memoryUpdates);
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0][3].tools, tools);
+    assert.deepEqual(calls[0][3].localTools, tools);
   }
 });
 

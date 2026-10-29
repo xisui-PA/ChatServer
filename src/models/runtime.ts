@@ -2,8 +2,9 @@ import { MAX_MODEL_TOOL_CALLS, MODEL_INPUT_TOKENS, TOOL_RESULT_TOKENS } from '..
 import { getModelApiKey } from './credentials';
 import { findProvider, loadModels } from './model-store';
 import { parseModelReference } from './reference';
-import { createResponse, ResponseItem, ResponseRequest, ResponsesApiError, resolveModelTimeoutMs } from './responses-client';
-import { Tool } from '../tools/interface';
+import { createResponse, ResponseCitation, ResponseItem, ResponseRequest, ResponseResult, ResponsesApiError, resolveModelTimeoutMs } from './responses-client';
+import { ApiToolDefinition, ApiToolSpec, Tool } from '../tools/interface';
+import { parseApiTools } from '../tools/api';
 import { ToolRunner } from '../tools/runner';
 import { assertInputBudget, boundedText, modelInputTokens } from './input-budget';
 import { withModelRetries } from './retry';
@@ -13,7 +14,10 @@ import { createSpeech, SpeechModel } from './speech-client';
 
 /** Per-request generation settings; never mutate a shared model's defaults. */
 export interface GenerationOptions {
-  tools?: readonly Tool[];
+  localTools?: readonly Tool[];
+  apiTools?: readonly ApiToolSpec[];
+  /** Delivers final-response citations without mixing metadata into model text. */
+  onCitations?: (citations: readonly ResponseCitation[]) => void;
   reasoningEffort?: ResponseRequest['reasoningEffort'];
 }
 
@@ -54,9 +58,13 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
     signal?: AbortSignal,
     options: GenerationOptions = {}
   ): Promise<string> {
-    const tools = options.tools ?? [];
-    assertInputBudget(input, instructions, tools.map((tool) => tool.definition));
-    return withModelRetries(() => this.generateOnce(input, instructions, signal, options), signal);
+    const localTools = options.localTools ?? [];
+    const apiTools = parseApiTools(options.apiTools ?? []);
+    assertInputBudget(input, instructions, [...localTools.map((tool) => tool.definition), ...apiTools]);
+    const generation = { ...options, localTools, apiTools };
+    const result = await withModelRetries(() => this.generateOnce(input, instructions, signal, generation), signal);
+    options.onCitations?.(result.citations);
+    return result.outputText;
   }
 
   /** Each attempt starts a fresh tool cycle and gets the provider's generation timeout. */
@@ -64,10 +72,11 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
     input: string | readonly ResponseItem[],
     instructions: string,
     signal: AbortSignal | undefined,
-    options: GenerationOptions
-  ): Promise<string> {
-    const tools = options.tools ?? [];
-    if (tools.length === 0) {
+    options: Omit<GenerationOptions, 'apiTools'> & { apiTools: readonly ApiToolDefinition[] }
+  ): Promise<ResponseResult> {
+    const localTools = options.localTools ?? [];
+    const apiTools = options.apiTools ?? [];
+    if (localTools.length === 0 && apiTools.length === 0) {
       const result = await createResponse({
         baseUrl: this.baseUrl,
         model: this.modelId,
@@ -78,7 +87,7 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
         timeoutMs: this.timeoutMs,
         signal
       });
-      return result.outputText;
+      return result;
     }
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -88,7 +97,7 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
     }
     const timer = setTimeout(cancel, this.timeoutMs);
     try {
-      return await this.generateWithTools(input, instructions, tools, controller.signal, options.reasoningEffort);
+      return await this.generateWithTools(input, instructions, localTools, apiTools, controller.signal, options.reasoningEffort);
     } catch (error) {
       if (controller.signal.aborted && !signal?.aborted) {
         throw new ResponsesApiError(`Model "${this.modelId}" timed out after ${this.timeoutMs} ms.`);
@@ -100,22 +109,26 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
     }
   }
 
-  /** Replays every output item, executes calls locally, and returns only final text. */
+  /** Replays every output item and executes only configured local function calls. */
   private async generateWithTools(
     input: string | readonly ResponseItem[],
     instructions: string,
-    tools: readonly Tool[],
+    localTools: readonly Tool[],
+    apiTools: readonly ApiToolDefinition[],
     signal: AbortSignal,
     reasoningEffort: ResponseRequest['reasoningEffort']
-  ): Promise<string> {
-    const runner = new ToolRunner(tools);
+  ): Promise<ResponseResult> {
+    const runner = new ToolRunner(localTools);
     const initial: ResponseItem[] = typeof input === 'string'
       ? [{ role: 'user', content: input }] : [...input];
     const turns: ResponseItem[][] = [];
-    const definitions = tools.map((tool) => tool.definition);
+    const localDefinitions = localTools.map((tool) => tool.definition);
+    const definitions = [...localDefinitions, ...apiTools];
+    const citations = new Map<string, ResponseCitation>();
     let usedCalls = 0;
+    let usedApiCalls = 0;
     const callIds = new Set<string>();
-    // Tool-producing rounds share the call budget; one final tool-free answer follows.
+    // Local rounds share a call budget; the final answer may still use hosted tools.
     for (let round = 0; round <= MAX_MODEL_TOOL_CALLS; round += 1) {
       signal.throwIfAborted();
       let history = [...initial, ...turns.flat()];
@@ -128,8 +141,13 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
         turns.length = 0;
         history = [...initial, { role: 'user', content: 'Tool history exceeded the input budget. Answer from the conversation and report that the tool results could not be retained.' }];
         usedCalls = MAX_MODEL_TOOL_CALLS;
+        usedApiCalls = MAX_MODEL_TOOL_CALLS;
       }
       assertInputBudget(history, instructions, definitions);
+      const available = [
+        ...(usedCalls < MAX_MODEL_TOOL_CALLS ? localDefinitions : []),
+        ...(usedApiCalls < MAX_MODEL_TOOL_CALLS ? apiTools : [])
+      ];
       const result = await createResponse({
         baseUrl: this.baseUrl,
         model: this.modelId,
@@ -139,8 +157,10 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
         reasoningEffort,
         timeoutMs: this.timeoutMs,
         signal,
-        tools: definitions,
-        toolChoice: usedCalls >= MAX_MODEL_TOOL_CALLS ? 'none' : 'auto'
+        tools: available.length > 0 ? available : definitions,
+        toolChoice: available.length === 0 ? 'none' : 'auto',
+        maxToolCalls: apiTools.length > 0 && usedApiCalls < MAX_MODEL_TOOL_CALLS
+          ? MAX_MODEL_TOOL_CALLS - usedApiCalls : undefined
       });
       const raw = result.raw;
       if (typeof raw !== 'object' || raw === null || !('output' in raw) || !Array.isArray(raw.output) ||
@@ -148,12 +168,27 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
         throw new Error('Tool-capable models must return a Responses API output array.');
       }
       const output = raw.output as ResponseItem[];
+      for (const citation of result.citations) {
+        citations.set(citation.url, citation);
+      }
+      const needsClient = output.find((item) => item.type === 'mcp_approval_request' ||
+        item.type === 'custom_tool_call' || item.type === 'computer_call' || item.type === 'local_shell_call' ||
+        item.type === 'apply_patch_call' || (item.type === 'tool_search_call' && item.execution === 'client'));
+      if (needsClient !== undefined) {
+        throw new Error(`Provider tool output "${String(needsClient.type)}" requires unsupported client execution or approval.`);
+      }
+      // Hosted calls execute at the provider; retain their items but never run them locally.
+      usedApiCalls += output.filter((item) => typeof item.type === 'string' &&
+        item.type.endsWith('_call') && item.type !== 'function_call').length;
+      if (usedApiCalls > MAX_MODEL_TOOL_CALLS) {
+        throw new Error('Model exceeded the provider-hosted tool call budget.');
+      }
       const calls = output.filter((item) => item.type === 'function_call');
       if (calls.length === 0) {
         if (!result.outputText) {
           throw new Error('Model returned neither tool calls nor final text.');
         }
-        return result.outputText;
+        return { ...result, citations: [...citations.values()] };
       }
       if (usedCalls >= MAX_MODEL_TOOL_CALLS) {
         throw new Error('Model continued calling tools after the tool budget was exhausted.');

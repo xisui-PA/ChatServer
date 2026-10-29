@@ -7,6 +7,18 @@ export interface ToolDefinition {
   strict: true;
 }
 
+/** Provider-hosted tool configuration, forwarded with its provider-specific options. */
+export interface ApiToolDefinition {
+  readonly type: string;
+  readonly [option: string]: unknown;
+}
+
+/** Local tool selection accepts a registered name or its explicit type form. */
+export type LocalToolSpec = string | { readonly type: string };
+
+/** Hosted tool selection accepts a type shorthand or a provider configuration object. */
+export type ApiToolSpec = string | ApiToolDefinition;
+
 /** An application-managed capability. Tool results must be JSON serializable. */
 export interface Tool {
   readonly definition: ToolDefinition;

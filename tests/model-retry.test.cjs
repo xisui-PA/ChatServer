@@ -113,7 +113,7 @@ test('a failed tool round restarts the complete generation rather than retrying 
   });
   let toolCalls = 0;
   const registry = await ModelRegistry.load('/unused', ['fixture/model']);
-  const result = await registry.get('fixture/model').generate('Hello', 'Reply briefly', undefined, { tools: [{
+  const result = await registry.get('fixture/model').generate('Hello', 'Reply briefly', undefined, { localTools: [{
     definition: { type: 'function', name: 'fixture_tool', description: 'Fixture tool', parameters: { type: 'object', properties: {} }, strict: true },
     execute: async () => { toolCalls += 1; return 'Fixture result'; }
   }] });

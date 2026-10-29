@@ -19,6 +19,15 @@
     }
   },
   "definitions": {
+    "localToolName": {
+      "type": "string",
+      "enum": ["web_search", "read_url", "calculate", "current_time"]
+    },
+    "apiToolType": {
+      "type": "string",
+      "pattern": "^\\S+$",
+      "not": { "enum": ["function", "custom"] }
+    },
     "nonEmptyString": {
       "type": "string",
       "pattern": "\\S"
@@ -132,9 +141,9 @@
             }
           ]
         },
-        "tools": {
+        "localTools": {
           "type": "array",
-          "description": "Application-managed replier tools. Omit to enable all four; [] disables tools. Duplicate entries are deduplicated.",
+          "description": "Application-managed replier tools, selected by name strings or objects containing only type. Omit to enable all four; [] disables local tools. Duplicate types are deduplicated.",
           "default": [
             "web_search",
             "read_url",
@@ -142,11 +151,34 @@
             "current_time"
           ],
           "items": {
-            "enum": [
-              "web_search",
-              "read_url",
-              "calculate",
-              "current_time"
+            "oneOf": [
+              { "$ref": "#/definitions/localToolName" },
+              {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": { "$ref": "#/definitions/localToolName" }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "apiTools": {
+          "type": "array",
+          "description": "Provider-hosted Responses API tools as type strings or definition objects with provider-specific options. Strings expand to objects with type. Omitted or [] enables none. The selected provider/model must support them; client-executed tools are not supported here.",
+          "default": [],
+          "items": {
+            "oneOf": [
+              { "$ref": "#/definitions/apiToolType" },
+              {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": { "$ref": "#/definitions/apiToolType" }
+                },
+                "additionalProperties": true
+              }
             ]
           }
         },

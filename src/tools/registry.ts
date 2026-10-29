@@ -1,6 +1,6 @@
 import { CalculateTool } from './calculate';
 import { CurrentTimeTool } from './current-time';
-import { Tool } from './interface';
+import { LocalToolSpec, Tool } from './interface';
 import { ReadUrlTool } from './read-url';
 import { WebSearchTool } from './web-search';
 
@@ -26,9 +26,30 @@ export function listTools(): string[] {
   return [...factories.keys()].sort();
 }
 
+/** Normalizes local selection syntax and validates names against the registered tools. */
+export function parseLocalTools(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error('localTools must be an array of registered tool names or objects with a type.');
+  }
+  const names = value.map((entry: unknown, index) => {
+    let name: unknown = entry;
+    if (typeof entry === 'object' && entry !== null && !Array.isArray(entry)) {
+      if (Object.keys(entry).some((key) => key !== 'type')) {
+        throw new Error(`localTools[${index}] supports only the type field.`);
+      }
+      name = 'type' in entry ? entry.type : undefined;
+    }
+    if (typeof name !== 'string' || !hasTool(name)) {
+      throw new Error(`localTools[${index}] must name a registered tool. Available: ${listTools().join(', ')}.`);
+    }
+    return name;
+  });
+  return [...new Set(names)];
+}
+
 /** Creates a per-replier tool set; an empty list disables tool calling. */
-export function createTools(names: readonly string[] = DEFAULT_TOOL_NAMES): Tool[] {
-  return [...new Set(names)].map((name) => {
+export function createTools(specs: readonly LocalToolSpec[] = DEFAULT_TOOL_NAMES): Tool[] {
+  return parseLocalTools(specs).map((name) => {
     const factory = factories.get(name);
     if (factory === undefined) {
       throw new Error(`Unknown tool "${name}". Available: ${listTools().join(', ')}.`);

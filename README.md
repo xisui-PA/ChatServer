@@ -39,7 +39,8 @@ with its bearer token. WeChat login and agent-wechat setup are managed separatel
          "messager": {
            "name": "wechat",
            "replier": "local/your-model-id",
-           "tools": [],
+           "localTools": [],
+           "apiTools": [],
            "options": {
              "baseUrl": "http://127.0.0.1:6174",
              "chatIds": ["wxid_example"]
@@ -53,8 +54,8 @@ with its bearer token. WeChat login and agent-wechat setup are managed separatel
 
    Replace `replier` with the printed reference and `wxid_example` with a direct
    chat or group ID from agent-wechat's `/api/chats`. Set `baseUrl` to your
-   agent-wechat server root, without `/api`. `tools: []` starts without function
-   calling; omit it to enable the built-in tools.
+   agent-wechat server root, without `/api`. `localTools: []` disables local
+   functions; omit it to enable the built-ins. `apiTools` defaults to `[]`.
 
 4. Set the **agent-wechat bearer token** and start ChatServer.
 
@@ -117,11 +118,58 @@ Each `chats` entry has a `messager` and optional `filters`:
 | `messager.memoryTokenLimit` | Tokens per conversation for notes and confirmed replies; defaults to 1,000 |
 | `messager.persona` | Optional replier identity, tone, and conversational style |
 | `messager.mainAccount` | Optional exact sender ID allowed to query `/status` in a direct chat |
-| `messager.tools` | Tool names; omitted enables all built-ins, `[]` disables them |
+| `messager.localTools` | Local tool names or `{ "type": "name" }` objects; omitted enables all four built-ins, `[]` disables local tools |
+| `messager.apiTools` | Hosted tool type strings or definition objects; omitted or `[]` enables none |
 | `messager.options` | Adapter settings below |
 | `filters` | Ordered filters; omitted or `[]` skips filtering |
 | `stt` | Optional object with `type: "model"`, required `model`, and optional `audioConversionCmd`; omitted disables voice input |
 | `tts` | Optional `{ "type": "model", "model": "provider/model-id", "options": { ... } }` for explicitly requested voice replies |
+
+The former `messager.tools` field has been replaced by `messager.localTools`;
+rename it in existing configurations. The old field is rejected with a migration
+error so that a previous `tools: []` cannot silently enable the default tools.
+
+Local and provider-hosted tools can be used together. For example, this enables
+local arithmetic and time plus the provider's hosted web search:
+
+```json
+{
+  "localTools": ["calculate", { "type": "current_time" }],
+  "apiTools": [
+    { "type": "web_search", "search_context_size": "low" }
+  ]
+}
+```
+
+Put these fields inside `messager`. Both arrays accept strings, objects, or a mix.
+For example, `"apiTools": ["web_search"]` is equivalent to
+`"apiTools": [{ "type": "web_search" }]`. Local objects contain only `type`,
+which must name a registered local tool; duplicate names are deduplicated across
+both forms. Hosted strings expand to `{ "type": "..." }`; hosted objects require
+a nonempty `type` and preserve their provider-specific options. The resulting
+objects are sent in the Responses API `tools` array alongside local function
+declarations. Use the selected provider/model's
+documented tool configuration; hosted tools are not discovered automatically.
+The provider validates support and tool-specific options, and unsupported requests
+fail rather than silently falling back to local tools. `function` and `custom`
+definitions are rejected here: register application-executed functions as local
+tools instead. Only hosted tools that finish at the provider and return text are
+supported; client execution, approval exchanges, and generated artifact delivery
+are not implemented. Filters and formatting repairs receive neither tool set.
+Set both fields to `[]` to disable all tool calling.
+
+Each generation attempt allows up to eight local calls and eight hosted calls
+across its model rounds, under the provider's existing timeout. Hosted requests
+send `max_tool_calls` with the remaining hosted budget; providers must support
+this Responses API parameter to enforce the cap during a response. All output
+items, including hosted calls and reasoning, are replayed when local calls need
+another round. Full-generation retries can repeat hosted calls and their charges.
+
+Provider URL citations are preserved as complete source links in outgoing text,
+including after a formatting repair. Text is shortened to reserve room for links;
+if the citations alone cannot fit the reply budget, delivery fails. Required hosted
+citations are included even when the sender did not ask for sources, as required
+by [OpenAI's hosted web search](https://developers.openai.com/api/docs/guides/tools-web-search).
 
 For example, set `messager.persona` to `"A warm, lightly humorous friend who gives practical photography advice."`
 Omitting it keeps the default helpful assistant. It affects only the replier;
@@ -353,7 +401,7 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
   Models receiving them must support image input. Pending media gets bounded
   retries; unavailable images are labeled rather than guessed.
 - **Replies:** Normally 1–2 short sentences, with a 150-token target and 200-token
-  hard cap. Citations are included only when explicitly requested. Oversized text
+  hard cap. Citations are included when explicitly requested or required by hosted tools. Oversized text
   is truncated locally. Malformed reply JSON or memory updates are logged in
   full and receive one formatting-only repair request without tools; a second
   invalid result stops delivery.
@@ -363,7 +411,8 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
 - **Tools:** `web_search` (DuckDuckGo), `read_url`, `calculate`, and `current_time`
   are enabled by default. Models need Responses API function calling to use them.
   Page reading supports public HTTP(S) text/HTML/JSON, not PDFs or authenticated
-  pages. Set `messager.tools` to select a subset or disable tools.
+  pages. Set `messager.localTools` to select a subset or disable local tools.
+  `messager.apiTools` separately enables provider-hosted tools; its default is empty.
 - **Failures:** Transient model errors retry the full generation up to three times,
   ten seconds apart. Polling backs off on API errors. Failed sends are never
   automatically retried because delivery may already have succeeded remotely.

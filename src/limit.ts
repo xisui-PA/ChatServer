@@ -116,7 +116,7 @@ export const DEFAULT_MODEL_TIMEOUT_MS = 180_000;
 export const MAX_MODEL_RETRIES = 3;
 /** Delay between complete model-generation retries. */
 export const MODEL_RETRY_DELAY_MS = 10_000;
-/** Maximum executed tool calls and tool-producing rounds per generation. */
+/** Maximum calls per tool category and local tool-producing rounds per generation attempt. */
 export const MAX_MODEL_TOOL_CALLS = 8;
 /** Maximum wait for model discovery in guided setup. */
 export const MODEL_DISCOVERY_TIMEOUT_MS = 10_000;

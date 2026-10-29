@@ -42,8 +42,9 @@ for (const [name, output] of malformed) {
     const result = await new ModelReplier(model, tools).replyTo(message, FilterOutcome.Optional, controller.signal);
     assert.deepEqual(result, { reply: { text: 'Hello!', channel: 'chat' }, memoryUpdates: validReply.memoryUpdates });
     assert.equal(calls.length, 2);
-    assert.deepEqual(calls[0][3].tools, tools);
-    assert.deepEqual(calls[1][3].tools, []);
+    assert.deepEqual(calls[0][3].localTools, tools);
+    assert.deepEqual(calls[1][3].localTools, []);
+    assert.deepEqual(calls[1][3].apiTools, []);
     assert.equal(calls[1][2], controller.signal);
     const repair = JSON.parse(calls[1][0]);
     assert.deepEqual(Object.keys(repair), ['output', 'validationError']);

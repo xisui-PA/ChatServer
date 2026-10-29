@@ -133,8 +133,8 @@ export class ChatServer {
         name,
         mainAccount: definition.messager.mainAccount,
         replier: new ModelReplier(
-          models.get(definition.messager.replier), createTools(definition.messager.tools), definition.messager.persona,
-          memoryTokenLimit, definition.tts !== undefined
+          models.get(definition.messager.replier), createTools(definition.messager.localTools), definition.messager.persona,
+          memoryTokenLimit, definition.tts !== undefined, definition.messager.apiTools
         ),
         replierModel: definition.messager.replier,
         memoryTokenLimit,
