@@ -1,12 +1,9 @@
 import { DEFAULT_MODEL_TIMEOUT_MS } from '../limit';
-import { hasFlag, optionalValue, requireValue, resolveConfigDir } from './cli-support';
+import { hasFlag, optionalValue } from './cli-support';
 import {
   DEFAULT_PROMPT,
-  existingApiKey,
   parseCommandOptions,
-  modelTimeoutOption,
-  requireModel,
-  requireProvider
+  loadTestModel
 } from './command-support';
 import { createResponse } from './responses-client';
 import { withModelRetries } from './retry';
@@ -50,16 +47,10 @@ export async function runTest(argv: string[]): Promise<void> {
     return;
   }
 
-  const configDir = resolveConfigDir(optionalValue(cli, 'configDir'));
-  const providerName = requireValue(cli, 'provider', '--provider');
-  const name = requireValue(cli, 'name', '--name');
-  const { provider } = await requireProvider(configDir, providerName);
-  const model = requireModel(provider, name);
-  const apiKey = await existingApiKey(provider);
+  const { provider, model, apiKey, timeoutMs } = await loadTestModel(cli);
   const prompt = optionalValue(cli, 'prompt') ?? DEFAULT_PROMPT;
-  const timeoutMs = modelTimeoutOption(optionalValue(cli, 'timeout'), provider.timeoutMs ?? DEFAULT_MODEL_TIMEOUT_MS);
 
-  console.log(`Testing ${name} (${model.id}) via ${provider.provider} at ${provider.baseUrl}...`);
+  console.log(`Testing ${model.name} (${model.id}) via ${provider.provider} at ${provider.baseUrl}...`);
 
   const result = await withModelRetries(() => createResponse({
     baseUrl: provider.baseUrl,

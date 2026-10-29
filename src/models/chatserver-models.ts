@@ -3,22 +3,26 @@ import { runAdd } from './add';
 import { runList } from './list';
 import { runRemove } from './remove';
 import { runTest } from './test';
+import { runTestStt } from './test-stt';
+import { runTestTts } from './test-tts';
 import { runUpdate } from './update';
 
-const COMMANDS = ['add', 'test', 'list', 'update', 'remove'];
+const COMMANDS = ['add', 'test', 'test-stt', 'test-tts', 'list', 'update', 'remove'];
 
 /**
  * General help text.
  */
 const HELP_TEXT = `Usage: chatserver-models <command> [options]
 
-Manage OpenAI-compatible chat and speech-to-text models. Provider details live in
+Manage OpenAI-compatible chat, speech-to-text, and text-to-speech models. Provider details live in
 <config_dir>/models.json; each provider's API key lives in the OS credential manager
 under the provider name.
 
 Commands:
   add            Add a model (guided setup when options are omitted)
   test           Send a prompt to a configured model
+  test-stt       Transcribe a local audio file with a configured model
+  test-tts       Synthesize test speech and save a padded WAV file
   list           List configured providers and models
   update         Edit provider/model settings (guided editor without edits)
   remove         Remove a model (and its provider once empty)
@@ -48,6 +52,12 @@ async function main(): Promise<void> {
       return;
     case 'test':
       await runTest(rest);
+      return;
+    case 'test-stt':
+      await runTestStt(rest);
+      return;
+    case 'test-tts':
+      await runTestTts(rest);
       return;
     case 'list':
       await runList(rest);

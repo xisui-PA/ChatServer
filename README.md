@@ -121,6 +121,7 @@ Each `chats` entry has a `messager` and optional `filters`:
 | `messager.options` | Adapter settings below |
 | `filters` | Ordered filters; omitted or `[]` skips filtering |
 | `stt` | Optional object with `type: "model"`, required `model`, and optional `audioConversionCmd`; omitted disables voice input |
+| `tts` | Optional `{ "type": "model", "model": "provider/model-id", "options": { ... } }` for explicitly requested voice replies |
 
 For example, set `messager.persona` to `"A warm, lightly humorous friend who gives practical photography advice."`
 Omitting it keeps the default helpful assistant. It affects only the replier;
@@ -220,6 +221,8 @@ macOS Keychain, Linux Secret Service (`secret-tool`), or Windows Credential Mana
 | `npm run model:update` | Guided provider/model editor; Enter keeps current values |
 | `npm run model:list` | List configured providers and models; `--json` prints the configuration |
 | `npm run model:test` | Send a test prompt to a configured model |
+| `npm run model:test-stt` | Transcribe a local audio file with a configured STT model |
+| `npm run model:test-tts` | Synthesize speech and save a WAV with the same padding as WeChat replies |
 | `npm run model:remove` | Remove a model and its provider/key if no models remain |
 
 Append `-- --config_dir ./chatserver-config` to select the quick start directory.
@@ -231,6 +234,20 @@ npm run model:add -- --config_dir ./chatserver-config --provider local --base-ur
 npm run model:test -- --config_dir ./chatserver-config --provider local --name your-model-id
 npm run model:update -- --config_dir ./chatserver-config --provider local --timeout 300000
 ```
+
+Test speech models without sending any WeChat messages:
+
+```bash
+npm run model:test-stt -- --provider local --name your-stt-model --file ./voice.wav
+npm run model:test-tts -- --provider local --name your-tts-model --voice your-provider-voice --text "Hello!" --output ./reply.wav
+```
+
+STT supports `--json` for a JSON transcript and `--audio-conversion-cmd` with
+`{input}`/`{output}` for WAV-only engines, using the same conversion as chat input.
+TTS accepts `--options` with a JSON object matching `tts.options`; `--voice` overrides
+its voice setting. Output defaults to `tts-test.wav`; use `--force` to overwrite.
+Both commands accept `--timeout`, `--config_dir`, and the same provider keys as
+`model:test`. File paths resolve from the current directory.
 
 `--name` selects a model's CLI alias (defaults to its ID). Update accepts `--model`
 to change its API ID and `--new-name` to rename its alias. If the API ID changes,
@@ -281,7 +298,7 @@ STT request; cached successful transcripts do not repeat conversion.
 Voice messages are transcribed sequentially after the reply delay and sender
 exclusions, before model filters and the replier. Transcripts retain the original
 sender, timestamp, and message ID and are reused across retained snapshots. Raw
-audio is not saved in conversation memory. Replies remain text-only.
+audio is not saved in conversation memory. Configure `tts` separately for voice replies.
 
 Agent-wechat normally [converts received voice to MP3](https://github.com/thisnick/agent-wechat/blob/main/packages/agent-server-rust/src/tools/wechat_media.rs).
 Audio is limited to 20 MiB per message. Pending media gets bounded retries;
@@ -289,6 +306,39 @@ unsupported audio (including raw SILK when upstream conversion fails), unavailab
 media, and recordings with no recognized speech are skipped with a log. STT
 request failures stop the turn rather than generating a reply from missing audio.
 Without `stt`, voice messages are ignored without downloads or model requests.
+
+### Voice replies (TTS)
+
+Add `tts` to the chat entry, alongside `messager`, `filters`, and optional `stt`:
+
+```json
+"tts": {
+  "type": "model",
+  "model": "local/your-tts-model-id",
+  "options": { "voice": "your-provider-voice", "speed": 1 }
+}
+```
+
+Register the TTS model in `models.json` using the model CLI. Its provider must
+support an OpenAI-compatible `/audio/speech` endpoint returning uncompressed WAV.
+`options` passes speech settings supported by that provider, such as `voice`,
+`speed`, or `instructions`; it defaults to `{}`. ChatServer controls `model`,
+`input`, `response_format` (`wav`), and `stream_format` (`audio`). Provider keys,
+timeouts, and model-request retries work as for other models.
+
+The replier selects voice only when the message being answered explicitly asks
+for a voice reply. An incoming voice message alone does not select voice output.
+The same short-reply limits apply to the spoken text. ChatServer adds independent
+random **0.5–2 second** silences before and after the audio, without requiring
+FFmpeg on the ChatServer machine.
+
+Voice replies use the normal serial queue and 1–3 minute pacing. The adapter uploads
+audio to agent-wechat's voice-job API and waits for confirmed completion, up to
+three minutes; this requires an agent-wechat version with voice-job support.
+Failure or uncertain delivery is logged without resending or sending an extra
+text reply. Pending jobs receive best-effort cancellation on failure or shutdown.
+Memory records the spoken text only after confirmed delivery; audio is not saved.
+Omitting `tts` keeps replies in text. Restart after configuration changes.
 
 ## Runtime behavior
 

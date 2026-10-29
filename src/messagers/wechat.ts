@@ -1,6 +1,7 @@
 import {
   MAX_ENCODED_AUDIO_BYTES,
   MAX_ENCODED_IMAGE_BYTES,
+  MAX_AUDIO_BYTES,
   MAX_TIMER_MS,
   MEDIA_RESPONSE_OVERHEAD_BYTES,
   WECHAT_BUNDLE_GAP_MS,
@@ -8,9 +9,14 @@ import {
   WECHAT_MAX_BACKOFF_EXPONENT,
   WECHAT_MESSAGE_PAGE_SIZE,
   WECHAT_POLL_INTERVAL_MS,
-  WECHAT_REQUEST_TIMEOUT_MS
+  WECHAT_REQUEST_TIMEOUT_MS,
+  WECHAT_VOICE_JOB_TIMEOUT_MS,
+  WECHAT_VOICE_JOB_POLL_MS,
+  WECHAT_VOICE_CANCEL_TIMEOUT_MS
 } from '../limit';
-import { AudioLoadResult, ImageLoadResult, IncomingMessage, MessageHandler, MessagerAdapter, MessagerStatus, OutgoingMessage } from './interface';
+import { AudioFile, AudioLoadResult, ImageLoadResult, IncomingMessage, MessageHandler, MessagerAdapter, MessagerStatus, OutgoingMessage } from './interface';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { ImageUnavailableError, imageDataUrl } from './images';
 import { audioFile } from './audio';
 import { MediaUnavailableError } from './media';
@@ -158,6 +164,13 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       if (!chatId) {
         throw new Error('WeChat reply requires a destination chat ID.');
       }
+      if (reply.voice) {
+        if (reply.audio === undefined) {
+          throw new Error('Voice reply requires synthesized audio.');
+        }
+        await this.sendVoice(message, chatId, reply.audio, signal);
+        return;
+      }
       const result = await this.request('/api/messages/send', { chatId, text: reply.text }, signal);
       if (!isRecord(result) || result.success !== true) {
         throw new Error('WeChat rejected the message send. Check the agent-server logs.');
@@ -166,6 +179,68 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     // A failed attempt must not poison the queue or cause an automatic retry.
     this.sending = send.catch(() => {});
     return send;
+  }
+
+  /** One idempotent upload; success means the agent confirmed the voice job completed. */
+  private async sendVoice(message: IncomingMessage, chatId: string, audio: AudioFile, signal?: AbortSignal): Promise<void> {
+    if (!audio.data.byteLength || audio.data.byteLength > MAX_AUDIO_BYTES) {
+      throw new Error('Voice reply audio is empty or exceeds the audio size limit.');
+    }
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    signal?.addEventListener('abort', cancel, { once: true });
+    if (signal?.aborted) {
+      controller.abort();
+    }
+    this.operations.add(controller);
+    const timer = setTimeout(cancel, WECHAT_VOICE_JOB_TIMEOUT_MS);
+    let jobId: string | undefined;
+    let terminal = false;
+    try {
+      controller.signal.throwIfAborted();
+      const form = new FormData();
+      form.set('chatId', chatId);
+      form.set('audio', new Blob([new Uint8Array(audio.data)], { type: audio.mimeType }), audio.filename);
+      let job = await this.request('/api/messages/voice', form, controller.signal, undefined,
+        { 'Idempotency-Key': randomUUID() });
+      while (true) {
+        if (!isRecord(job) || typeof job.jobId !== 'string' || !job.jobId ||
+          typeof job.status !== 'string' || job.chatId !== chatId || job.accountId !== this.account ||
+          jobId !== undefined && jobId !== job.jobId) {
+          throw new Error('Unexpected WeChat voice job response.');
+        }
+        jobId = job.jobId;
+        this.requireActiveAccount(message);
+        controller.signal.throwIfAborted();
+        terminal = ['completed', 'failed', 'needs_review', 'cancelled'].includes(job.status);
+        if (job.status === 'completed') {
+          return;
+        }
+        if (terminal) {
+          throw new Error(`WeChat voice job ${jobId} ${job.status}${typeof job.error === 'string' ? `: ${job.error}` : ''}. Delivery will not be retried.`);
+        }
+        await delay(WECHAT_VOICE_JOB_POLL_MS, undefined, { signal: controller.signal });
+        this.requireActiveAccount(message);
+        job = await this.request(`/api/messages/voice/${encodeURIComponent(jobId)}`, undefined, controller.signal);
+      }
+    } catch (error) {
+      if (jobId !== undefined && !terminal) {
+        try {
+          await this.request(`/api/messages/voice/${encodeURIComponent(jobId)}/cancel`, {},
+            AbortSignal.timeout(WECHAT_VOICE_CANCEL_TIMEOUT_MS));
+        } catch (cancelError) {
+          console.warn(`[wechat] unable to cancel voice job ${jobId}:`, cancelError instanceof Error ? cancelError.message : cancelError);
+        }
+      }
+      if (controller.signal.aborted) {
+        throw new Error(`WeChat voice job cancelled or exceeded ${WECHAT_VOICE_JOB_TIMEOUT_MS} ms; delivery may be unconfirmed and will not be retried.`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', cancel);
+      this.operations.delete(controller);
+    }
   }
 
   private requireActiveAccount(message: IncomingMessage): void {
@@ -508,7 +583,8 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     cursor.ids.add(message.localId);
   }
 
-  private async request(endpoint: string, body?: unknown, signal?: AbortSignal, maxBytes?: number): Promise<unknown> {
+  private async request(endpoint: string, body?: unknown, signal?: AbortSignal, maxBytes?: number,
+    headers: Readonly<Record<string, string>> = {}): Promise<unknown> {
     if (this.handler === undefined) {
       throw new Error('WeChat adapter is stopped.');
     }
@@ -523,8 +599,9 @@ export class WechatMessagerAdapter implements MessagerAdapter {
     try {
       const response = await fetch(`${this.baseUrl}${endpoint}`, {
         method: body === undefined ? 'GET' : 'POST',
-        headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
+        headers: { Authorization: `Bearer ${this.token}`,
+          ...(body instanceof FormData ? {} : { 'Content-Type': 'application/json' }), ...headers },
+        body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body),
         signal: controller.signal
       });
       if (!response.ok) {
