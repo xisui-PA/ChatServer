@@ -171,7 +171,10 @@ if the citations alone cannot fit the reply budget, delivery fails. Required hos
 citations are included even when the sender did not ask for sources, as required
 by [OpenAI's hosted web search](https://developers.openai.com/api/docs/guides/tools-web-search).
 
-For example, set `messager.persona` to `"A warm, lightly humorous friend who gives practical photography advice."`
+The `messager.persona` setting accepts a nonempty string with one or more sentences.
+For example: `"You are a warm, lightly humorous friend. Give practical photography advice. Keep your tone relaxed."`
+Use `\n` within the JSON string to separate paragraphs; sentence breaks and newlines
+are preserved in the prompt.
 Omitting it keeps the default helpful assistant. It affects only the replier;
 reply-length, citation, tool, JSON, and memory rules still apply. Restart the server
 after changing this setting.

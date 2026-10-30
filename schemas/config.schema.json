@@ -129,9 +129,9 @@
           "description": "Per-conversation token budget for this pipeline's memory notes and confirmed replies, including their compact JSON metadata. Oldest entries are removed first; three-day retention still applies."
         },
         "persona": {
-          "description": "Optional replier identity, tone, and style. Omit for the default helpful assistant. Applies only to the replier; output-format and reply-length requirements still apply.",
+          "description": "Optional replier identity, tone, and style as a nonempty string with one or more sentences; newlines are preserved. Omit for the default helpful assistant. Applies only to the replier; output-format and reply-length requirements still apply.",
           "allOf": [{ "$ref": "#/definitions/nonEmptyString" }],
-          "examples": ["A warm, lightly humorous friend who gives practical photography advice."]
+          "examples": ["You are a warm, lightly humorous friend. Give practical photography advice. Keep your tone relaxed."]
         },
         "mainAccount": {
           "description": "Exact sender ID authorized to use /status in a direct chat; usually wxid_..., not a display name.",
