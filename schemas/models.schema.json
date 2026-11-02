@@ -84,6 +84,11 @@
             }
           ]
         },
+        "supportsImageToolResults": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether this model endpoint accepts native image content arrays in function_call_output. When true and read_image is available, chat images are referenced by ID and retrieved through that tool instead of attached to the initial prompt. If lookup is unavailable, direct attachments are used."
+        },
         "name": {
           "description": "CLI display/lookup name. Defaults to id when omitted.",
           "allOf": [

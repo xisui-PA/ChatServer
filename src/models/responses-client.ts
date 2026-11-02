@@ -1,5 +1,5 @@
 import { DEFAULT_MODEL_TIMEOUT_MS, MAX_TIMER_MS } from '../limit';
-import { ToolDefinition } from '../tools/interface';
+import { ApiToolDefinition, ToolDefinition } from '../tools/interface';
 
 /** Validates durations against Node's timer range, including programmatic callers. */
 export function resolveModelTimeoutMs(value: unknown = DEFAULT_MODEL_TIMEOUT_MS): number {
@@ -11,6 +11,11 @@ export function resolveModelTimeoutMs(value: unknown = DEFAULT_MODEL_TIMEOUT_MS)
 
 /** A Responses API input/output item, preserved across tool round trips. */
 export type ResponseItem = Record<string, unknown>;
+
+/** A provider citation retained for delivery alongside the generated answer. */
+export interface ResponseCitation {
+  url: string;
+}
 
 /**
  * Options for a single OpenAI Responses API call.
@@ -24,10 +29,12 @@ export interface ResponseRequest {
   apiKey: string;
   /** Prompt or conversation input sent as `input`. */
   input: string | readonly ResponseItem[];
-  /** Application-managed function declarations available during generation. */
-  tools?: readonly ToolDefinition[];
+  /** Local function declarations and provider-hosted tools available during generation. */
+  tools?: readonly (ToolDefinition | ApiToolDefinition)[];
   /** Disable further tool calls when the per-reply budget has been consumed. */
   toolChoice?: 'auto' | 'none';
+  /** Provider-side cap on built-in calls within this response. */
+  maxToolCalls?: number;
   /** Optional system instructions. */
   instructions?: string;
   /** Explicit reasoning effort; omitted preserves provider/model defaults. */
@@ -48,6 +55,8 @@ export interface ResponseResult {
   id?: string;
   /** Concatenated text from the response's output items. */
   outputText: string;
+  /** HTTP(S) sources cited in output text annotations. */
+  citations: readonly ResponseCitation[];
   /** Complete decoded response body. */
   raw: unknown;
 }
@@ -115,6 +124,38 @@ export function extractOutputText(payload: unknown): string {
   return parts.join('\n').trim();
 }
 
+/** Retains URL citations even when generated text uses provider-specific markers. */
+export function extractCitations(payload: unknown): ResponseCitation[] {
+  if (!isRecord(payload) || !Array.isArray(payload.output)) {
+    return [];
+  }
+  const urls = new Set<string>();
+  for (const item of payload.output) {
+    if (!isRecord(item) || item.type !== 'message' || !Array.isArray(item.content)) {
+      continue;
+    }
+    for (const content of item.content) {
+      if (!isRecord(content) || content.type !== 'output_text' || !Array.isArray(content.annotations)) {
+        continue;
+      }
+      for (const annotation of content.annotations) {
+        if (!isRecord(annotation) || annotation.type !== 'url_citation' || typeof annotation.url !== 'string') {
+          continue;
+        }
+        try {
+          const url = new URL(annotation.url);
+          if ((url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password) {
+            urls.add(url.href);
+          }
+        } catch {
+          // Ignore malformed citation URLs rather than rendering them as links.
+        }
+      }
+    }
+  }
+  return [...urls].map((url) => ({ url }));
+}
+
 /**
  * Sends one prompt through the Responses API and returns the text it produced.
  */
@@ -141,6 +182,9 @@ export async function createResponse(request: ResponseRequest): Promise<Response
     // Replay the complete output locally, including any encrypted reasoning.
     body.store = false;
     body.include = ['reasoning.encrypted_content'];
+    if (request.maxToolCalls !== undefined) {
+      body.max_tool_calls = request.maxToolCalls;
+    }
   }
   if (request.reasoningEffort !== undefined) {
     body.reasoning = { effort: request.reasoningEffort };
@@ -187,7 +231,7 @@ export async function createResponse(request: ResponseRequest): Promise<Response
     if (isRecord(parsed) && ((parsed.error !== undefined && parsed.error !== null) || parsed.status === 'failed' || parsed.status === 'incomplete')) {
       throw new ResponsesApiError(`Response from ${url} did not complete successfully.`, response.status);
     }
-    const result: ResponseResult = { outputText: extractOutputText(parsed), raw: parsed };
+    const result: ResponseResult = { outputText: extractOutputText(parsed), citations: extractCitations(parsed), raw: parsed };
     if (isRecord(parsed) && typeof parsed.id === 'string') {
       result.id = parsed.id;
     }

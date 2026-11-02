@@ -39,7 +39,8 @@ with its bearer token. WeChat login and agent-wechat setup are managed separatel
          "messager": {
            "name": "wechat",
            "replier": "local/your-model-id",
-           "tools": [],
+           "localTools": [],
+           "apiTools": [],
            "options": {
              "baseUrl": "http://127.0.0.1:6174",
              "chatIds": ["wxid_example"]
@@ -53,8 +54,8 @@ with its bearer token. WeChat login and agent-wechat setup are managed separatel
 
    Replace `replier` with the printed reference and `wxid_example` with a direct
    chat or group ID from agent-wechat's `/api/chats`. Set `baseUrl` to your
-   agent-wechat server root, without `/api`. `tools: []` starts without function
-   calling; omit it to enable the built-in tools.
+   agent-wechat server root, without `/api`. `localTools: []` disables local
+   functions; omit it to enable the built-ins. `apiTools` defaults to `[]`.
 
 4. Set the **agent-wechat bearer token** and start ChatServer.
 
@@ -96,7 +97,7 @@ explicit directory, the server creates a default `{ "chats": [] }` on first run.
 
 The directory contains `config.json`, `models.json`, optional ignore/token files,
 optional `<messager_name>_context` files, and automatically managed `conversations/`
-memory files. An empty `chats` array
+memory and image-cache files. An empty `chats` array
 runs no adapters.
 
 Set `messager.memoryTokenLimit` to change the token budget for each conversation
@@ -117,13 +118,63 @@ Each `chats` entry has a `messager` and optional `filters`:
 | `messager.memoryTokenLimit` | Tokens per conversation for notes and confirmed replies; defaults to 1,000 |
 | `messager.persona` | Optional replier identity, tone, and conversational style |
 | `messager.mainAccount` | Optional exact sender ID allowed to query `/status` in a direct chat |
-| `messager.tools` | Tool names; omitted enables all built-ins, `[]` disables them |
+| `messager.localTools` | Local tool names or `{ "type": "name" }` objects; omitted enables all five built-ins, `[]` disables local tools |
+| `messager.apiTools` | Hosted tool type strings or definition objects; omitted or `[]` enables none |
 | `messager.options` | Adapter settings below |
 | `filters` | Ordered filters; omitted or `[]` skips filtering |
 | `stt` | Optional object with `type: "model"`, required `model`, and optional `audioConversionCmd`; omitted disables voice input |
 | `tts` | Optional `{ "type": "model", "model": "provider/model-id", "options": { ... } }` for explicitly requested voice replies |
 
-For example, set `messager.persona` to `"A warm, lightly humorous friend who gives practical photography advice."`
+The former `messager.tools` field has been replaced by `messager.localTools`;
+rename it in existing configurations. The old field is rejected with a migration
+error so that a previous `tools: []` cannot silently enable the default tools.
+
+Local and provider-hosted tools can be used together. For example, this enables
+local arithmetic and time plus the provider's hosted web search:
+
+```json
+{
+  "localTools": ["calculate", { "type": "current_time" }],
+  "apiTools": [
+    { "type": "web_search", "search_context_size": "low" }
+  ]
+}
+```
+
+Put these fields inside `messager`. Both arrays accept strings, objects, or a mix.
+For example, `"apiTools": ["web_search"]` is equivalent to
+`"apiTools": [{ "type": "web_search" }]`. Local objects contain only `type`,
+which must name a registered local tool; duplicate names are deduplicated across
+both forms. Hosted strings expand to `{ "type": "..." }`; hosted objects require
+a nonempty `type` and preserve their provider-specific options. The resulting
+objects are sent in the Responses API `tools` array alongside local function
+declarations. Use the selected provider/model's
+documented tool configuration; hosted tools are not discovered automatically.
+The provider validates support and tool-specific options, and unsupported requests
+fail rather than silently falling back to local tools. `function` and `custom`
+definitions are rejected here: register application-executed functions as local
+tools instead. Only hosted tools that finish at the provider and return text are
+supported; client execution, approval exchanges, and generated artifact delivery
+are not implemented. Filters and formatting repairs receive neither tool set.
+Set both fields to `[]` to disable all tool calling.
+
+Each generation attempt allows up to eight local calls and eight hosted calls
+across its model rounds, under the provider's existing timeout. Hosted requests
+send `max_tool_calls` with the remaining hosted budget; providers must support
+this Responses API parameter to enforce the cap during a response. All output
+items, including hosted calls and reasoning, are replayed when local calls need
+another round. Full-generation retries can repeat hosted calls and their charges.
+
+Provider URL citations are preserved as complete source links in outgoing text,
+including after a formatting repair. Text is shortened to reserve room for links;
+if the citations alone cannot fit the reply budget, delivery fails. Required hosted
+citations are included even when the sender did not ask for sources, as required
+by [OpenAI's hosted web search](https://developers.openai.com/api/docs/guides/tools-web-search).
+
+The `messager.persona` setting accepts a nonempty string with one or more sentences.
+For example: `"You are a warm, lightly humorous friend. Give practical photography advice. Keep your tone relaxed."`
+Use `\n` within the JSON string to separate paragraphs; sentence breaks and newlines
+are preserved in the prompt.
 Omitting it keeps the default helpful assistant. It affects only the replier;
 reply-length, citation, tool, JSON, and memory rules still apply. Restart the server
 after changing this setting.
@@ -204,8 +255,9 @@ for an inline list. Ignored messages are removed before models see them.
 
 Model filters return `allowed`, `denied`, or `optional`. The first decisive result
 wins; if all abstain, the replier decides. Errors fail closed. Filter models have
-thinking disabled (`reasoning.effort: none`) and receive no tools; choose a provider
-that supports that setting.
+thinking disabled (`reasoning.effort: none`); choose a provider that supports that
+setting. When `read_image` is enabled for the pipeline, model filters can use it
+to inspect cached images, but receive no other local or hosted tools.
 
 ## Models
 
@@ -214,6 +266,31 @@ Provider URLs, model IDs/aliases, and provider-specific `timeoutMs` live in
 **3-minute** timeout. API keys are stored separately under the provider name:
 macOS Keychain, Linux Secret Service (`secret-tool`), or Windows Credential Manager
 (requires the `CredentialManager` PowerShell module).
+
+Each entry in a provider's `models` array can set `supportsImageToolResults`.
+It defaults to `false`; enable it only when that model endpoint accepts native
+image content arrays in `function_call_output`:
+
+```json
+{
+  "id": "gpt-6.1-sol",
+  "name": "sol",
+  "supportsImageToolResults": true
+}
+```
+
+When enabled, the initial chat input contains image IDs and source labels without
+image bytes. The model can call `read_image` when visual inspection is needed;
+the image is returned directly inside that function's result. Keep `read_image`
+enabled in `messager.localTools` for this mode. If image lookup is unavailable,
+filters and repliers fall back to direct attachments. Pending optional images do
+not defer a text-only decision; `read_image` can retry their source media if the
+model asks to inspect them. Existing cached bytes are reused before fetching
+source media again. With the default `false`, up to
+four new images attach directly and older tool-retrieved images attach as a
+separate image message on the next model round. Filter and replier models each
+use their own setting, even when they share a chat snapshot. Restart the server
+after changing model settings.
 
 | Command | Purpose |
 | --- | --- |
@@ -349,21 +426,37 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
   are skipped. Self messages provide context without triggering replies; manual
   replies arriving during generation invalidate the pending answer.
 - **Media:** Text, images, and optional STT voice input are supported; video,
-  stickers, and files are skipped. Up to four images per snapshot, each at most 5 MiB, are loaded lazily.
+  stickers, and files are skipped. The latest four new images per snapshot, each at most 5 MiB, are attached directly.
   Models receiving them must support image input. Pending media gets bounded
   retries; unavailable images are labeled rather than guessed.
+  With `read_image` enabled, images in retained snapshot messages are also downloaded
+  into `<conversation-hash>.images.json` beside the conversation memory file.
+  Older images are represented by source labels in `cachedImages`; the tool attaches
+  a requested image as native image input on the next model round. Models with
+  `supportsImageToolResults: true` receive image IDs only in the initial input and
+  receive requested images directly in tool results. Both repliers
+  and model filters can use it. Lookups are restricted to the current account and
+  conversation and work after restart. Images expire three days after the original
+  source timestamp; lookup never refreshes expiry. Cleanup runs at startup and
+  hourly, and expired entries cannot be retrieved between cleanups. Each conversation
+  keeps at most 30 images and 64 MiB of cache JSON, evicting the oldest first.
+  Recent cached-image labels have a 1,000-token prompt allowance; IDs retained in
+  memory can still retrieve images omitted from that list. Without `read_image`,
+  images are attached directly without persistent image caching.
 - **Replies:** Normally 1–2 short sentences, with a 150-token target and 200-token
-  hard cap. Citations are included only when explicitly requested. Oversized text
+  hard cap. Citations are included when explicitly requested or required by hosted tools. Oversized text
   is truncated locally. Malformed reply JSON or memory updates are logged in
   full and receive one formatting-only repair request without tools; a second
   invalid result stops delivery.
 - **Memory:** Compact notes and confirmed replies persist per conversation for
   three days, capped at 1,000 tokens by default (`messager.memoryTokenLimit`). This is summarized context, not a raw
-  message archive. Image bytes are not saved in memory.
-- **Tools:** `web_search` (DuckDuckGo), `read_url`, `calculate`, and `current_time`
+  message archive. Image bytes live in the separate image cache and do not count
+  toward the text memory budget.
+- **Tools:** `web_search` (DuckDuckGo), `read_url`, `calculate`, `current_time`, and `read_image`
   are enabled by default. Models need Responses API function calling to use them.
   Page reading supports public HTTP(S) text/HTML/JSON, not PDFs or authenticated
-  pages. Set `messager.tools` to select a subset or disable tools.
+  pages. Set `messager.localTools` to select a subset or disable local tools.
+  `messager.apiTools` separately enables provider-hosted tools; its default is empty.
 - **Failures:** Transient model errors retry the full generation up to three times,
   ten seconds apart. Polling backs off on API errors. Failed sends are never
   automatically retried because delivery may already have succeeded remotely.

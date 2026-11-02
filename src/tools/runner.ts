@@ -1,5 +1,11 @@
 import { MAX_TOOL_ARGUMENT_CHARS, MAX_TOOL_OUTPUT_CHARS } from '../limit';
-import { Tool } from './interface';
+import { Tool, ToolImageResult } from './interface';
+import { CachedImage } from '../conversations/image-store';
+
+interface ToolExecutionResult {
+  output: string;
+  images: readonly CachedImage[];
+}
 
 /** Executes only the functions explicitly supplied to this replier. */
 export class ToolRunner {
@@ -15,7 +21,7 @@ export class ToolRunner {
   }
 
   /** Converts argument/execution errors into data the model can act on. */
-  public async execute(name: string, encodedArgs: string, signal?: AbortSignal): Promise<string> {
+  public async execute(name: string, encodedArgs: string, signal?: AbortSignal): Promise<ToolExecutionResult> {
     signal?.throwIfAborted();
     try {
       if (encodedArgs.length > MAX_TOOL_ARGUMENT_CHARS) {
@@ -28,14 +34,16 @@ export class ToolRunner {
       const args: unknown = JSON.parse(encodedArgs);
       const result = await tool.execute(args, signal);
       signal?.throwIfAborted();
-      const output = JSON.stringify({ ok: true, result });
+      const images = result instanceof ToolImageResult ? result.images : [];
+      const output = JSON.stringify({ ok: true, result: result instanceof ToolImageResult
+        ? images.map((image) => ({ imageId: image.id, messageId: image.messageId, status: 'attached' })) : result });
       if (output.length > MAX_TOOL_OUTPUT_CHARS) {
         throw new Error('Tool output exceeds the size limit.');
       }
-      return output;
+      return { output, images };
     } catch (error) {
       signal?.throwIfAborted();
-      return JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Tool execution failed.' });
+      return { output: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : 'Tool execution failed.' }), images: [] };
     }
   }
 }

@@ -127,7 +127,7 @@ test('server uses each pipeline budget for prompts, loading, updates, and confir
   registerMessager('memory-fixture', () => ({ name: 'fixture', start() {}, reply() {} }));
   const limits = [undefined, 4000, 700];
   const server = new ChatServer({ chats: limits.map(memoryTokenLimit => ({
-    messager: { name: 'memory-fixture', replier: 'provider/model', tools: [], memoryTokenLimit }, filters: []
+    messager: { name: 'memory-fixture', replier: 'provider/model', localTools: [], memoryTokenLimit }, filters: []
   })) }, directory);
   let prompt;
   const chats = server.buildChats({ get: () => ({ generate: async (_input, instructions) => {

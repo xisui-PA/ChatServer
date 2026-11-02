@@ -19,6 +19,7 @@ import { ModelReplier } from './repliers/model';
 import { ModelRegistry } from './models/runtime';
 import { createTools } from './tools/registry';
 import { ConversationMemoryStore } from './conversations/memory-store';
+import { ConversationImageStore } from './conversations/image-store';
 import { limitReplyText } from './repliers/limits';
 import { ResponsesApiError } from './models/responses-client';
 import { PendingMediaError } from './models/pending-media';
@@ -51,6 +52,7 @@ interface ResolvedChat {
   replier: Replier;
   replierModel: string;
   memoryTokenLimit: number;
+  imageLookupEnabled?: boolean;
   stt?: VoiceTranscriber;
   tts?: VoiceSynthesizer;
   contextFile?: MessagerContextFile;
@@ -81,6 +83,7 @@ export class ChatServer {
   private readonly conversations = new Map<string, ConversationState>();
   private readonly pending = new Map<string, ConversationState>();
   private readonly memory: ConversationMemoryStore;
+  private readonly images: ConversationImageStore;
   private replySlotReady = false;
   private readonly shutdown = new AbortController();
   private readonly started: ResolvedChat[] = [];
@@ -102,6 +105,7 @@ export class ChatServer {
     private readonly configDir: string
   ) {
     this.memory = new ConversationMemoryStore(configDir);
+    this.images = new ConversationImageStore(configDir);
   }
 
   /** Starts the configured adapters once, cleaning up if startup fails. */
@@ -129,15 +133,17 @@ export class ChatServer {
     return this.options.chats.map((definition, index) => {
       const name = `chat-${index + 1}`;
       const memoryTokenLimit = definition.messager.memoryTokenLimit ?? DEFAULT_MEMORY_TOKEN_LIMIT;
+      const localTools = createTools(definition.messager.localTools);
       return {
         name,
         mainAccount: definition.messager.mainAccount,
         replier: new ModelReplier(
-          models.get(definition.messager.replier), createTools(definition.messager.tools), definition.messager.persona,
-          memoryTokenLimit, definition.tts !== undefined
+          models.get(definition.messager.replier), localTools, definition.messager.persona,
+          memoryTokenLimit, definition.tts !== undefined, definition.messager.apiTools
         ),
         replierModel: definition.messager.replier,
         memoryTokenLimit,
+        imageLookupEnabled: localTools.some((tool) => tool.definition.name === 'read_image'),
         contextFile: new MessagerContextFile(this.configDir, definition.messager.name),
         tts: definition.tts === undefined ? undefined : new VoiceSynthesizer(
           models.getSynthesizer(definition.tts.model), definition.tts.options
@@ -170,6 +176,7 @@ export class ChatServer {
     try {
       this.startedAt = Date.now();
       await this.memory.start();
+      await this.images.start();
       const references = this.options.chats.flatMap((chat) => [
         chat.messager.replier,
         ...(chat.stt === undefined ? [] : [chat.stt.model]),
@@ -220,7 +227,7 @@ export class ChatServer {
     this.pending.clear();
     this.conversations.clear();
     const stopping = this.started.splice(0);
-    const results = await Promise.allSettled([this.memory.close(), ...stopping.map(async (chat) => {
+    const results = await Promise.allSettled([this.memory.close(), this.images.close(), ...stopping.map(async (chat) => {
       await chat.messager.stop?.();
     })]);
     const failure = results.find((result) => result.status === 'rejected');
@@ -489,7 +496,10 @@ export class ChatServer {
       return false;
     }
     console.log(`[chat:${chat.name}] processing ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}`);
-    message = { ...message, additionalContext: await chat.contextFile?.load() };
+    message = {
+      ...message, additionalContext: await chat.contextFile?.load(),
+      imageAccess: chat.imageLookupEnabled ? this.images.forConversation(memoryKey) : undefined
+    };
     try {
       message = { ...message, memory: await this.memory.load(memoryKey, chat.memoryTokenLimit) };
     } catch (error) {
@@ -531,7 +541,18 @@ export class ChatServer {
       return false;
     }
     try {
-      await this.memory.update(memoryKey, result.memoryUpdates, message.messages ?? [message], chat.memoryTokenLimit);
+      const sources = [...(message.messages ?? [message])];
+      // Retrieved images retain their original provenance when generating new notes.
+      try {
+        for (const image of await message.imageAccess?.list() ?? []) {
+          if (!sources.some((source) => source.id === image.messageId)) {
+            sources.push({ id: image.messageId, text: '', senderId: image.senderId, timestamp: image.timestamp });
+          }
+        }
+      } catch (error) {
+        console.warn('[images] unable to load image sources for memory:', error);
+      }
+      await this.memory.update(memoryKey, result.memoryUpdates, sources, chat.memoryTokenLimit);
     } catch (error) {
       console.error(`[chat:${chat.name}] failed to save conversation notes:`, error);
     }

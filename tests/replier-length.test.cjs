@@ -40,7 +40,7 @@ test('oversized English, Chinese, and emoji replies are capped locally without a
     assert.equal(result.reply.channel, 'chat');
     assert.deepEqual(result.memoryUpdates, memoryUpdates);
     assert.equal(calls.length, 1);
-    assert.deepEqual(calls[0][3].tools, tools);
+    assert.deepEqual(calls[0][3].localTools, tools);
   }
 });
 
@@ -57,4 +57,32 @@ test('a denied message makes no model request', async () => {
   const result = await replier.replyTo(message, FilterOutcome.Denied);
   assert.equal(result.reply, undefined);
   assert.equal(calls.length, 0);
+});
+
+test('existing plain and Markdown citation links are preserved without duplicate URLs', () => {
+  const url = 'https://example.com/source';
+  for (const text of [`An update. ${url}`, `An update. [Source](${url})`, `An update. <${url}>`]) {
+    assert.equal(limitReplyText(text, [url, url]), text);
+  }
+  const other = 'https://example.org/reference';
+  assert.equal(limitReplyText(`An update. ${url}`, [url, other]), `An update. ${url} ${other}`);
+  assert.equal(limitReplyText('See https://example.com', ['https://example.com/']), 'See https://example.com');
+});
+
+test('citation detection distinguishes a source from a longer URL with the same prefix', () => {
+  const source = 'https://example.com/source';
+  assert.equal(limitReplyText(`See ${source}-other`, [source]), `See ${source}-other ${source}`);
+  assert.equal(limitReplyText(`See ${source}?other=true`, [source]), `See ${source}?other=true ${source}`);
+});
+
+test('oversized replies move existing citations outside the truncated text without breaking or duplicating links', () => {
+  const urls = ['https://example.com/source_(details)?a=1&b=2', 'https://example.org/reference'];
+  const text = `${longText} [Source](${urls[0]}) <${urls[1]}>`;
+  const result = limitReplyText(text, urls);
+  assert.ok(countTokens(result) <= 200);
+  assert.ok(result.endsWith(urls.join(' ')));
+  for (const url of urls) {
+    assert.equal(result.split(url).length - 1, 1);
+  }
+  assert.ok(!result.includes('[Source]('));
 });

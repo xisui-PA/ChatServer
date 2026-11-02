@@ -19,6 +19,15 @@
     }
   },
   "definitions": {
+    "localToolName": {
+      "type": "string",
+      "enum": ["web_search", "read_url", "calculate", "current_time", "read_image"]
+    },
+    "apiToolType": {
+      "type": "string",
+      "pattern": "^\\S+$",
+      "not": { "enum": ["function", "custom"] }
+    },
     "nonEmptyString": {
       "type": "string",
       "pattern": "\\S"
@@ -120,9 +129,9 @@
           "description": "Per-conversation token budget for this pipeline's memory notes and confirmed replies, including their compact JSON metadata. Oldest entries are removed first; three-day retention still applies."
         },
         "persona": {
-          "description": "Optional replier identity, tone, and style. Omit for the default helpful assistant. Applies only to the replier; output-format and reply-length requirements still apply.",
+          "description": "Optional replier identity, tone, and style as a nonempty string with one or more sentences; newlines are preserved. Omit for the default helpful assistant. Applies only to the replier; output-format and reply-length requirements still apply.",
           "allOf": [{ "$ref": "#/definitions/nonEmptyString" }],
-          "examples": ["A warm, lightly humorous friend who gives practical photography advice."]
+          "examples": ["You are a warm, lightly humorous friend. Give practical photography advice. Keep your tone relaxed."]
         },
         "mainAccount": {
           "description": "Exact sender ID authorized to use /status in a direct chat; usually wxid_..., not a display name.",
@@ -132,21 +141,45 @@
             }
           ]
         },
-        "tools": {
+        "localTools": {
           "type": "array",
-          "description": "Application-managed replier tools. Omit to enable all four; [] disables tools. Duplicate entries are deduplicated.",
+          "description": "Application-managed tools, selected by name strings or objects containing only type. Omit to enable all built-ins; [] disables local tools. read_image enables conversation image caching and lookup for replies and model filters. Duplicate types are deduplicated.",
           "default": [
             "web_search",
             "read_url",
             "calculate",
-            "current_time"
+            "current_time",
+            "read_image"
           ],
           "items": {
-            "enum": [
-              "web_search",
-              "read_url",
-              "calculate",
-              "current_time"
+            "oneOf": [
+              { "$ref": "#/definitions/localToolName" },
+              {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": { "$ref": "#/definitions/localToolName" }
+                },
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "apiTools": {
+          "type": "array",
+          "description": "Provider-hosted Responses API tools as type strings or definition objects with provider-specific options. Strings expand to objects with type. Omitted or [] enables none. The selected provider/model must support them; client-executed tools are not supported here.",
+          "default": [],
+          "items": {
+            "oneOf": [
+              { "$ref": "#/definitions/apiToolType" },
+              {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": { "$ref": "#/definitions/apiToolType" }
+                },
+                "additionalProperties": true
+              }
             ]
           }
         },

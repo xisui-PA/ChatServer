@@ -1,3 +1,10 @@
+import type { CachedImage } from '../conversations/image-store';
+
+/** Native image attachments are kept separate from JSON tool output. */
+export class ToolImageResult {
+  public constructor(public readonly images: readonly CachedImage[]) {}
+}
+
 /** A function declaration sent to a model through the Responses API. */
 export interface ToolDefinition {
   type: 'function';
@@ -7,7 +14,19 @@ export interface ToolDefinition {
   strict: true;
 }
 
-/** An application-managed capability. Tool results must be JSON serializable. */
+/** Provider-hosted tool configuration, forwarded with its provider-specific options. */
+export interface ApiToolDefinition {
+  readonly type: string;
+  readonly [option: string]: unknown;
+}
+
+/** Local tool selection accepts a registered name or its explicit type form. */
+export type LocalToolSpec = string | { readonly type: string };
+
+/** Hosted tool selection accepts a type shorthand or a provider configuration object. */
+export type ApiToolSpec = string | ApiToolDefinition;
+
+/** An application-managed capability returning JSON data or native image attachments. */
 export interface Tool {
   readonly definition: ToolDefinition;
   execute(args: unknown, signal?: AbortSignal): Promise<unknown>;
