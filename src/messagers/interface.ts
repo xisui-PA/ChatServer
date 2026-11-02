@@ -20,6 +20,13 @@ export interface AudioFile {
   mimeType: string;
 }
 
+/** Generated image bytes, kept outside the model's JSON reply and conversation memory. */
+export interface ImageFile {
+  data: Uint8Array;
+  filename: string;
+  mimeType: string;
+}
+
 export type AudioLoadResult =
   | { status: 'ready'; audio: AudioFile }
   | { status: 'pending' }
@@ -59,6 +66,8 @@ export interface IncomingMessage extends ConversationMessage {
   memory?: ConversationMemory;
   /** Server-scoped image cache; its methods and bytes are never serialized into JSON context. */
   imageAccess?: ConversationImageAccess;
+  /** Server-owned artifact sink; persists generated images independently of final reply success. */
+  onGeneratedImages?: (images: readonly ImageFile[]) => Promise<void>;
   /** Optional operator-written background from the messager's context file. */
   additionalContext?: string;
   /** Optional channel or room the message belongs to. */
@@ -77,6 +86,10 @@ export interface OutgoingMessage {
   voice?: boolean;
   /** Synthesized and padded speech, attached by the server before delivery. */
   audio?: AudioFile;
+  /** Provider-generated images to deliver with the optional text caption. */
+  images?: readonly ImageFile[];
+  /** Cache IDs assigned by the server, retained in confirmed reply memory. */
+  imageIds?: readonly string[];
   /** Optional channel or room to target. */
   channel?: string;
   /**

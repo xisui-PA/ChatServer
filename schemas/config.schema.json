@@ -183,6 +183,31 @@
             ]
           }
         },
+        "imageGeneration": {
+          "type": "boolean",
+          "description": "Enable provider-hosted image generation. Omit to enable when apiTools includes image_generation. True adds the hosted tool if missing; false removes it. Requires support from the replier's provider/model."
+        },
+        "imageWidthLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384,
+          "default": 1024,
+          "description": "Maximum generated image width in pixels. Combined with imageHeightLimit as the requested hosted-tool size unless a smaller concrete size is set in apiTools. The provider must support the requested dimensions. PNG output is required."
+        },
+        "imageHeightLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384,
+          "default": 1024,
+          "description": "Maximum generated image height in pixels. Combined with imageWidthLimit as the requested hosted-tool size unless a smaller concrete size is set in apiTools. The provider must support the requested dimensions. PNG output is required."
+        },
+        "dailyImageGenLimit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "default": 10,
+          "description": "Daily image generation allowance shared by this messager's conversations. Zero disables generation. Usage is kept only in memory and resets on server restart or at server-local midnight; ambiguous provider failures consume quota."
+        },
         "options": {
           "$ref": "#/definitions/wechatOptions"
         }

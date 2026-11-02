@@ -8,9 +8,10 @@ import { parseApiTools } from '../tools/api';
 import { ToolRunner } from '../tools/runner';
 import { assertInputBudget, boundedText, modelInputTokens } from './input-budget';
 import { withModelRetries } from './retry';
-import { AudioFile } from '../messagers/interface';
+import { AudioFile, ImageFile } from '../messagers/interface';
 import { createTranscription, TranscriptionModel } from './transcriptions-client';
 import { createSpeech, SpeechModel } from './speech-client';
+import { generatedImages, ImageGenerationPolicy } from './image-generation';
 
 /** Per-request generation settings; never mutate a shared model's defaults. */
 export interface GenerationOptions {
@@ -18,7 +19,18 @@ export interface GenerationOptions {
   apiTools?: readonly ApiToolSpec[];
   /** Delivers final-response citations without mixing metadata into model text. */
   onCitations?: (citations: readonly ResponseCitation[]) => void;
+  /** Receives completed images only after the entire generation succeeds. */
+  onImages?: (images: readonly ImageFile[]) => void;
+  /** Persists validated artifacts immediately, before further model work or formatting repair. */
+  onGeneratedImages?: (images: readonly ImageFile[]) => Promise<void>;
+  imageGeneration?: ImageGenerationPolicy;
   reasoningEffort?: ResponseRequest['reasoningEffort'];
+}
+
+/** Completed artifacts survive complete-generation retries without another image charge. */
+interface GeneratedImageState {
+  images: ImageFile[];
+  output: ResponseItem[];
 }
 
 /** A configured model that accepts text or multimodal input and returns text. */
@@ -62,11 +74,15 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
     options: GenerationOptions = {}
   ): Promise<string> {
     const localTools = options.localTools ?? [];
-    const apiTools = parseApiTools(options.apiTools ?? []);
+    const configured = parseApiTools(options.apiTools ?? []);
+    const imageGeneration = options.imageGeneration ?? new ImageGenerationPolicy({}, configured);
+    const apiTools = imageGeneration.tools(configured);
     assertInputBudget(input, instructions, [...localTools.map((tool) => tool.definition), ...apiTools]);
-    const generation = { ...options, localTools, apiTools };
+    const generated: GeneratedImageState = { images: [], output: [] };
+    const generation = { ...options, localTools, apiTools, imageGeneration, generated };
     const result = await withModelRetries(() => this.generateOnce(input, instructions, signal, generation), signal);
     options.onCitations?.(result.citations);
+    options.onImages?.(result.images ?? []);
     return result.outputText;
   }
 
@@ -75,8 +91,8 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
     input: string | readonly ResponseItem[],
     instructions: string,
     signal: AbortSignal | undefined,
-    options: Omit<GenerationOptions, 'apiTools'> & { apiTools: readonly ApiToolDefinition[] }
-  ): Promise<ResponseResult> {
+    options: Omit<GenerationOptions, 'apiTools'> & { apiTools: readonly ApiToolDefinition[]; generated: GeneratedImageState }
+  ): Promise<ResponseResult & { images?: readonly ImageFile[] }> {
     const localTools = options.localTools ?? [];
     const apiTools = options.apiTools ?? [];
     if (localTools.length === 0 && apiTools.length === 0) {
@@ -100,7 +116,8 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
     }
     const timer = setTimeout(cancel, this.timeoutMs);
     try {
-      return await this.generateWithTools(input, instructions, localTools, apiTools, controller.signal, options.reasoningEffort);
+      return await this.generateWithTools(input, instructions, localTools, apiTools, controller.signal,
+        options.reasoningEffort, options.imageGeneration, options.generated, options.onGeneratedImages);
     } catch (error) {
       if (controller.signal.aborted && !signal?.aborted) {
         throw new ResponsesApiError(`Model "${this.modelId}" timed out after ${this.timeoutMs} ms.`);
@@ -119,15 +136,24 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
     localTools: readonly Tool[],
     apiTools: readonly ApiToolDefinition[],
     signal: AbortSignal,
-    reasoningEffort: ResponseRequest['reasoningEffort']
-  ): Promise<ResponseResult> {
+    reasoningEffort: ResponseRequest['reasoningEffort'],
+    imageGeneration: ImageGenerationPolicy | undefined,
+    generated: GeneratedImageState,
+    onGeneratedImages?: GenerationOptions['onGeneratedImages']
+  ): Promise<ResponseResult & { images: readonly ImageFile[] }> {
     const runner = new ToolRunner(localTools);
-    const initial: ResponseItem[] = typeof input === 'string'
-      ? [{ role: 'user', content: input }] : [...input];
+    const initial: ResponseItem[] = [
+      ...(typeof input === 'string' ? [{ role: 'user', content: input }] : input),
+      ...generated.output
+    ];
+    if (generated.images.length > 0) {
+      instructions += '\nAn image was already generated for this request before a later model round failed. Its output is included as context and the application will deliver the same image with your final reply. Do not generate another image or claim image generation is unavailable; finish the reply using this completed artifact.';
+    }
     const turns: ResponseItem[][] = [];
     const localDefinitions = localTools.map((tool) => tool.definition);
     const definitions = [...localDefinitions, ...apiTools];
     const citations = new Map<string, ResponseCitation>();
+    const images = generated.images;
     let usedCalls = 0;
     let usedApiCalls = 0;
     const callIds = new Set<string>();
@@ -147,30 +173,63 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
         usedApiCalls = MAX_MODEL_TOOL_CALLS;
       }
       assertInputBudget(history, instructions, definitions);
-      const available = [
+      let available = [
         ...(usedCalls < MAX_MODEL_TOOL_CALLS ? localDefinitions : []),
         ...(usedApiCalls < MAX_MODEL_TOOL_CALLS ? apiTools : [])
       ];
-      const result = await createResponse({
-        baseUrl: this.baseUrl,
-        model: this.modelId,
-        apiKey: this.apiKey,
-        input: history,
-        instructions,
-        reasoningEffort,
-        timeoutMs: this.timeoutMs,
-        signal,
-        tools: available.length > 0 ? available : definitions,
-        toolChoice: available.length === 0 ? 'none' : 'auto',
-        maxToolCalls: apiTools.length > 0 && usedApiCalls < MAX_MODEL_TOOL_CALLS
-          ? MAX_MODEL_TOOL_CALLS - usedApiCalls : undefined
-      });
+      const reservation = images.length === 0 && available.some((tool) => tool.type === 'image_generation')
+        ? await imageGeneration?.reserve() : undefined;
+      if (reservation === undefined) {
+        available = available.filter((tool) => tool.type !== 'image_generation');
+      }
+      // A reserved slot plus max_tool_calls=1 bounds image charges before execution.
+      // On a network error the slot stays consumed because provider execution is unknown.
+      let result: ResponseResult;
+      try {
+        signal.throwIfAborted();
+        result = await createResponse({
+          baseUrl: this.baseUrl,
+          model: this.modelId,
+          apiKey: this.apiKey,
+          input: history,
+          instructions,
+          reasoningEffort,
+          timeoutMs: this.timeoutMs,
+          signal,
+          tools: available.length > 0 ? available : definitions.filter((tool) => tool.type !== 'image_generation'),
+          toolChoice: available.length === 0 ? 'none' : 'auto',
+          maxToolCalls: reservation !== undefined ? 1 :
+            available.some((tool) => tool.type !== 'function') ? MAX_MODEL_TOOL_CALLS - usedApiCalls : undefined
+        });
+      } catch (error) {
+        if (error instanceof ResponsesApiError && error.status !== undefined &&
+          error.status >= 400 && error.status < 500 && error.status !== 408) {
+          // A rejected request never started image generation; ambiguous errors retain the slot.
+          await reservation?.finish(0);
+        }
+        throw error;
+      }
       const raw = result.raw;
       if (typeof raw !== 'object' || raw === null || !('output' in raw) || !Array.isArray(raw.output) ||
         !raw.output.every((item: unknown) => typeof item === 'object' && item !== null && !Array.isArray(item))) {
         throw new Error('Tool-capable models must return a Responses API output array.');
       }
       const output = raw.output as ResponseItem[];
+      const imageCalls = output.filter((item) => item.type === 'image_generation_call');
+      await reservation?.finish(imageCalls.length);
+      if (imageCalls.length > 0 && reservation === undefined) {
+        throw new Error('Provider generated images without an available image generation quota.');
+      }
+      if (reservation !== undefined && output.filter((item) => typeof item.type === 'string' &&
+        item.type.endsWith('_call') && item.type !== 'function_call').length > 1) {
+        throw new Error('Provider exceeded the reserved image generation tool call budget.');
+      }
+      const completed = generatedImages(imageCalls, imageGeneration?.size);
+      if (completed.length > 0) {
+        images.push(...completed);
+        generated.output.push(...imageCalls);
+        await onGeneratedImages?.(completed);
+      }
       for (const citation of result.citations) {
         citations.set(citation.url, citation);
       }
@@ -188,10 +247,10 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
       }
       const calls = output.filter((item) => item.type === 'function_call');
       if (calls.length === 0) {
-        if (!result.outputText) {
+        if (!result.outputText && images.length === 0) {
           throw new Error('Model returned neither tool calls nor final text.');
         }
-        return { ...result, citations: [...citations.values()] };
+        return { ...result, citations: [...citations.values()], images };
       }
       if (usedCalls >= MAX_MODEL_TOOL_CALLS) {
         throw new Error('Model continued calling tools after the tool budget was exhausted.');
@@ -212,7 +271,8 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
         for (const image of toolOutput.images) {
           content.push({ type: 'input_text', text: JSON.stringify({
             imageId: image.id, messageId: image.messageId, senderId: image.senderId,
-            senderName: image.senderName, timestamp: image.timestamp
+            senderName: image.senderName, timestamp: image.timestamp,
+            origin: image.origin, deliveryStatus: image.deliveryStatus
           }) });
           content.push({ type: 'input_image', image_url: image.dataUrl, detail: 'auto' });
         }

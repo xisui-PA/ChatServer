@@ -164,6 +164,32 @@ export class WechatMessagerAdapter implements MessagerAdapter {
       if (!chatId) {
         throw new Error('WeChat reply requires a destination chat ID.');
       }
+      if (reply.images !== undefined && reply.images.length > 0) {
+        if (reply.voice || reply.audio !== undefined) {
+          throw new Error('WeChat image replies cannot also contain voice audio.');
+        }
+        // Validate all attachments before sending any part of the reply.
+        const images = reply.images.map((image) => {
+          const data = Buffer.from(image.data).toString('base64');
+          const url = imageDataUrl(data);
+          const mimeType = url.slice(5, url.indexOf(';'));
+          if (mimeType !== image.mimeType) {
+            throw new Error('WeChat image MIME type does not match its bytes.');
+          }
+          return { data, mimeType };
+        });
+        for (const [index, image] of images.entries()) {
+          this.requireActiveAccount(message);
+          signal?.throwIfAborted();
+          const result = await this.request('/api/messages/send', {
+            chatId, image, ...(index === 0 && reply.text.trim() ? { text: reply.text } : {})
+          }, signal);
+          if (!isRecord(result) || result.success !== true) {
+            throw new Error('WeChat rejected the image send. Check the agent-server logs.');
+          }
+        }
+        return;
+      }
       if (reply.voice) {
         if (reply.audio === undefined) {
           throw new Error('Voice reply requires synthesized audio.');

@@ -1,4 +1,4 @@
-import { MAX_MEMORY_TOKEN_LIMIT, MIN_MEMORY_TOKEN_LIMIT } from './limit';
+import { DEFAULT_DAILY_IMAGE_GEN_LIMIT, DEFAULT_IMAGE_HEIGHT_LIMIT, DEFAULT_IMAGE_WIDTH_LIMIT, MAX_MEMORY_TOKEN_LIMIT, MIN_MEMORY_TOKEN_LIMIT } from './limit';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { hasFilter, listFilters } from './filters/registry';
@@ -7,6 +7,7 @@ import { parseModelReference } from './models/reference';
 import { parseLocalTools } from './tools/registry';
 import { ApiToolDefinition, ApiToolSpec, LocalToolSpec } from './tools/interface';
 import { parseApiTools } from './tools/api';
+import { parseImageDimension } from './models/image-generation';
 
 /** Configuration for a registered messager implementation. */
 export interface MessagerSpec {
@@ -24,6 +25,14 @@ export interface MessagerSpec {
   localTools?: readonly LocalToolSpec[];
   /** Hosted type strings or definition objects; omitted or [] disables hosted tools. */
   apiTools?: readonly ApiToolSpec[];
+  /** Enable provider-hosted image generation; omitted detects image_generation in apiTools. */
+  imageGeneration?: boolean;
+  /** Maximum generated image width in pixels; defaults to 1024. */
+  imageWidthLimit?: number;
+  /** Maximum generated image height in pixels; defaults to 1024. */
+  imageHeightLimit?: number;
+  /** Shared daily generated-image allowance; defaults to 10, zero disables generation. */
+  dailyImageGenLimit?: number;
   /** Options passed to the messager factory. */
   options?: Readonly<Record<string, unknown>>;
 }
@@ -205,6 +214,15 @@ function modelReference(value: unknown, where: string): string {
   return reference;
 }
 
+/** Parses a numeric image dimension and reports errors against its config field. */
+function imageDimensionLimit(value: unknown, fallback: number, where: string): number {
+  try {
+    return parseImageDimension(value === undefined ? fallback : value);
+  } catch {
+    throw new ConfigError(`${where} must be an integer between 1 and 16384.`);
+  }
+}
+
 /** Parses the chat transport and its bound reply model. */
 function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
   if (!isPlainObject(value)) {
@@ -213,7 +231,8 @@ function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
   if (Object.hasOwn(value, 'tools')) {
     throw new ConfigError(`${where}.tools has been replaced by localTools; rename it and use apiTools for provider-hosted tools.`);
   }
-  warnUnknownKeys(value, ['name', 'replier', 'persona', 'memoryTokenLimit', 'mainAccount', 'localTools', 'apiTools', 'options'], where);
+  warnUnknownKeys(value, ['name', 'replier', 'persona', 'memoryTokenLimit', 'mainAccount', 'localTools', 'apiTools',
+    'imageGeneration', 'imageWidthLimit', 'imageHeightLimit', 'dailyImageGenLimit', 'options'], where);
   if (typeof value.name !== 'string' || !value.name.trim()) {
     throw new ConfigError(`${where}: "name" must be a non-empty registered messager name.`);
   }
@@ -233,6 +252,15 @@ function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
     throw new ConfigError(`${where}.mainAccount must be a non-empty sender ID.`);
   }
   const mainAccount = (value.mainAccount as string | undefined)?.trim();
+  if (value.imageGeneration !== undefined && typeof value.imageGeneration !== 'boolean') {
+    throw new ConfigError(`${where}.imageGeneration must be a boolean.`);
+  }
+  const imageWidthLimit = imageDimensionLimit(value.imageWidthLimit, DEFAULT_IMAGE_WIDTH_LIMIT, `${where}.imageWidthLimit`);
+  const imageHeightLimit = imageDimensionLimit(value.imageHeightLimit, DEFAULT_IMAGE_HEIGHT_LIMIT, `${where}.imageHeightLimit`);
+  const dailyImageGenLimit = value.dailyImageGenLimit === undefined ? DEFAULT_DAILY_IMAGE_GEN_LIMIT : value.dailyImageGenLimit;
+  if (typeof dailyImageGenLimit !== 'number' || !Number.isSafeInteger(dailyImageGenLimit) || dailyImageGenLimit < 0) {
+    throw new ConfigError(`${where}.dailyImageGenLimit must be a nonnegative safe integer.`);
+  }
   if (!hasMessager(name)) {
     throw new ConfigError(
       `${where}: unknown messager "${name}". Available: ${listMessagers().join(', ')}.`
@@ -259,7 +287,8 @@ function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
     }
   }
   return { name, replier: modelReference(value.replier, `${where}.replier`), persona,
-    memoryTokenLimit: memoryTokenLimit as number | undefined, mainAccount, options, localTools, apiTools };
+    memoryTokenLimit: memoryTokenLimit as number | undefined, mainAccount, options, localTools, apiTools,
+    imageGeneration: value.imageGeneration as boolean | undefined, imageWidthLimit, imageHeightLimit, dailyImageGenLimit };
 }
 
 /** Parses a filter specification and validates its registered name. */

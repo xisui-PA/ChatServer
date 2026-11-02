@@ -20,6 +20,8 @@ export interface MemoryNote {
 export interface SentReply {
   id: string;
   text: string;
+  /** Generated cache IDs remain available even when older labels leave the prompt budget. */
+  imageIds?: readonly string[];
   sentAt: string;
   expiresAt: string;
   channel?: string;

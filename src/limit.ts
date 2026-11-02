@@ -70,6 +70,12 @@ export const MAX_MEMORY_SOURCE_IDS = 64;
 export const MAX_MEMORY_ID_CHARS = 128;
 
 // Images, voice input, and local audio conversion.
+/** Default maximum generated image width in pixels. */
+export const DEFAULT_IMAGE_WIDTH_LIMIT = 1024;
+/** Default maximum generated image height in pixels. */
+export const DEFAULT_IMAGE_HEIGHT_LIMIT = 1024;
+/** Daily image generation allowance shared by a messager's conversations. */
+export const DEFAULT_DAILY_IMAGE_GEN_LIMIT = 10;
 /** Maximum decoded bytes in one received image. */
 export const MAX_IMAGE_BYTES = 5 * 1_024 * 1_024;
 /** Maximum base64 characters encoding an allowed image. */
