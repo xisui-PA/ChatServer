@@ -1,4 +1,5 @@
 import { ConversationMemory } from '../conversations/interface';
+import type { ConversationImageAccess } from '../conversations/image-store';
 
 /** Distinguishes media that may become available from terminal failures. */
 export type ImageLoadResult =
@@ -56,6 +57,8 @@ export interface IncomingMessage extends ConversationMessage {
   messages?: readonly ConversationMessage[];
   /** Pruned, persistent conversation notes and confirmed sent replies. */
   memory?: ConversationMemory;
+  /** Server-scoped image cache; its methods and bytes are never serialized into JSON context. */
+  imageAccess?: ConversationImageAccess;
   /** Optional operator-written background from the messager's context file. */
   additionalContext?: string;
   /** Optional channel or room the message belongs to. */

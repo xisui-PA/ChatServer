@@ -19,6 +19,8 @@ export interface ModelEntry {
   id: string;
   /** Name used to refer to this model on the command line. */
   name: string;
+  /** Accepts native image content in function_call_output; omitted means false. */
+  supportsImageToolResults?: boolean;
 }
 
 /**
@@ -87,7 +89,13 @@ function parseModelEntry(value: unknown, where: string, seen: Set<string>): Mode
     throw new ModelStoreError(`${where}: "name" must be a non-empty string.`);
   }
 
-  const entry: ModelEntry = { id, name: name.trim() };
+  if (value.supportsImageToolResults !== undefined && typeof value.supportsImageToolResults !== 'boolean') {
+    throw new ModelStoreError(`${where}: "supportsImageToolResults" must be a boolean.`);
+  }
+  const entry: ModelEntry = {
+    id, name: name.trim(),
+    ...(value.supportsImageToolResults === undefined ? {} : { supportsImageToolResults: value.supportsImageToolResults })
+  };
   if (seen.has(entry.name)) {
     throw new ModelStoreError(`${where}: duplicate model name "${entry.name}".`);
   }

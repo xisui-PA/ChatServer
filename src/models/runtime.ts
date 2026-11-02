@@ -23,6 +23,8 @@ export interface GenerationOptions {
 
 /** A configured model that accepts text or multimodal input and returns text. */
 export interface TextModel {
+  /** Missing means false; enabled models retrieve images through native tool results. */
+  readonly supportsImageToolResults?: boolean;
   generate(
     input: string | readonly ResponseItem[],
     instructions: string,
@@ -37,7 +39,8 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
     private readonly baseUrl: string,
     private readonly modelId: string,
     private readonly apiKey: string,
-    private readonly timeoutMs: number
+    private readonly timeoutMs: number,
+    public readonly supportsImageToolResults = false
   ) {}
 
   public transcribe(audio: AudioFile, signal?: AbortSignal): Promise<string> {
@@ -194,6 +197,7 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
         throw new Error('Model continued calling tools after the tool budget was exhausted.');
       }
       const turn = [...output];
+      const imageParts: Record<string, unknown>[] = [];
       for (const call of calls) {
         if (typeof call.call_id !== 'string' || !call.call_id || typeof call.name !== 'string' ||
           typeof call.arguments !== 'string' || callIds.has(call.call_id)) {
@@ -202,9 +206,27 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
         callIds.add(call.call_id);
         const toolOutput = usedCalls < MAX_MODEL_TOOL_CALLS
           ? await runner.execute(call.name, call.arguments, signal)
-          : JSON.stringify({ ok: false, error: 'Tool budget exhausted; answer using existing results.' });
+          : { output: JSON.stringify({ ok: false, error: 'Tool budget exhausted; answer using existing results.' }), images: [] };
         usedCalls += 1;
-        turn.push({ type: 'function_call_output', call_id: call.call_id, output: boundedText(toolOutput, TOOL_RESULT_TOKENS) });
+        const content: Record<string, unknown>[] = [];
+        for (const image of toolOutput.images) {
+          content.push({ type: 'input_text', text: JSON.stringify({
+            imageId: image.id, messageId: image.messageId, senderId: image.senderId,
+            senderName: image.senderName, timestamp: image.timestamp
+          }) });
+          content.push({ type: 'input_image', image_url: image.dataUrl, detail: 'auto' });
+        }
+        const text = boundedText(toolOutput.output, TOOL_RESULT_TOKENS);
+        if (this.supportsImageToolResults && content.length > 0) {
+          turn.push({ type: 'function_call_output', call_id: call.call_id,
+            output: [{ type: 'input_text', text }, ...content] });
+        } else {
+          turn.push({ type: 'function_call_output', call_id: call.call_id, output: text });
+          imageParts.push(...content);
+        }
+      }
+      if (imageParts.length > 0) {
+        turn.push({ role: 'user', content: imageParts });
       }
       turns.push(turn);
     }
@@ -228,20 +250,21 @@ export class ModelRegistry {
     const bindings = [...new Set(references)].map((reference) => {
       const { provider: providerName, modelId } = parseModelReference(reference);
       const provider = findProvider(file, providerName);
-      if (provider === undefined || !provider.models.some((model) => model.id === modelId)) {
+      const model = provider?.models.find((model) => model.id === modelId);
+      if (provider === undefined || model === undefined) {
         throw new Error(`Model "${reference}" is not configured in models.json. Use chatserver-models add first.`);
       }
-      return { reference, provider, modelId };
+      return { reference, provider, model };
     });
     const keys = new Map<string, string>();
-    for (const { reference, provider, modelId } of bindings) {
+    for (const { reference, provider, model } of bindings) {
       let apiKey = keys.get(provider.provider);
       if (apiKey === undefined) {
         apiKey = await getModelApiKey(provider.provider);
         keys.set(provider.provider, apiKey);
       }
       registry.models.set(reference, new ProviderModel(
-        provider.baseUrl, modelId, apiKey, resolveModelTimeoutMs(provider.timeoutMs)
+        provider.baseUrl, model.id, apiKey, resolveModelTimeoutMs(provider.timeoutMs), model.supportsImageToolResults ?? false
       ));
     }
     return registry;

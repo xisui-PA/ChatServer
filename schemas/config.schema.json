@@ -21,7 +21,7 @@
   "definitions": {
     "localToolName": {
       "type": "string",
-      "enum": ["web_search", "read_url", "calculate", "current_time"]
+      "enum": ["web_search", "read_url", "calculate", "current_time", "read_image"]
     },
     "apiToolType": {
       "type": "string",
@@ -143,12 +143,13 @@
         },
         "localTools": {
           "type": "array",
-          "description": "Application-managed replier tools, selected by name strings or objects containing only type. Omit to enable all four; [] disables local tools. Duplicate types are deduplicated.",
+          "description": "Application-managed tools, selected by name strings or objects containing only type. Omit to enable all built-ins; [] disables local tools. read_image enables conversation image caching and lookup for replies and model filters. Duplicate types are deduplicated.",
           "default": [
             "web_search",
             "read_url",
             "calculate",
-            "current_time"
+            "current_time",
+            "read_image"
           ],
           "items": {
             "oneOf": [

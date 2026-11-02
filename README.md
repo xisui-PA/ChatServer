@@ -97,7 +97,7 @@ explicit directory, the server creates a default `{ "chats": [] }` on first run.
 
 The directory contains `config.json`, `models.json`, optional ignore/token files,
 optional `<messager_name>_context` files, and automatically managed `conversations/`
-memory files. An empty `chats` array
+memory and image-cache files. An empty `chats` array
 runs no adapters.
 
 Set `messager.memoryTokenLimit` to change the token budget for each conversation
@@ -118,7 +118,7 @@ Each `chats` entry has a `messager` and optional `filters`:
 | `messager.memoryTokenLimit` | Tokens per conversation for notes and confirmed replies; defaults to 1,000 |
 | `messager.persona` | Optional replier identity, tone, and conversational style |
 | `messager.mainAccount` | Optional exact sender ID allowed to query `/status` in a direct chat |
-| `messager.localTools` | Local tool names or `{ "type": "name" }` objects; omitted enables all four built-ins, `[]` disables local tools |
+| `messager.localTools` | Local tool names or `{ "type": "name" }` objects; omitted enables all five built-ins, `[]` disables local tools |
 | `messager.apiTools` | Hosted tool type strings or definition objects; omitted or `[]` enables none |
 | `messager.options` | Adapter settings below |
 | `filters` | Ordered filters; omitted or `[]` skips filtering |
@@ -255,8 +255,9 @@ for an inline list. Ignored messages are removed before models see them.
 
 Model filters return `allowed`, `denied`, or `optional`. The first decisive result
 wins; if all abstain, the replier decides. Errors fail closed. Filter models have
-thinking disabled (`reasoning.effort: none`) and receive no tools; choose a provider
-that supports that setting.
+thinking disabled (`reasoning.effort: none`); choose a provider that supports that
+setting. When `read_image` is enabled for the pipeline, model filters can use it
+to inspect cached images, but receive no other local or hosted tools.
 
 ## Models
 
@@ -265,6 +266,31 @@ Provider URLs, model IDs/aliases, and provider-specific `timeoutMs` live in
 **3-minute** timeout. API keys are stored separately under the provider name:
 macOS Keychain, Linux Secret Service (`secret-tool`), or Windows Credential Manager
 (requires the `CredentialManager` PowerShell module).
+
+Each entry in a provider's `models` array can set `supportsImageToolResults`.
+It defaults to `false`; enable it only when that model endpoint accepts native
+image content arrays in `function_call_output`:
+
+```json
+{
+  "id": "gpt-6.1-sol",
+  "name": "sol",
+  "supportsImageToolResults": true
+}
+```
+
+When enabled, the initial chat input contains image IDs and source labels without
+image bytes. The model can call `read_image` when visual inspection is needed;
+the image is returned directly inside that function's result. Keep `read_image`
+enabled in `messager.localTools` for this mode. If image lookup is unavailable,
+filters and repliers fall back to direct attachments. Pending optional images do
+not defer a text-only decision; `read_image` can retry their source media if the
+model asks to inspect them. Existing cached bytes are reused before fetching
+source media again. With the default `false`, up to
+four new images attach directly and older tool-retrieved images attach as a
+separate image message on the next model round. Filter and replier models each
+use their own setting, even when they share a chat snapshot. Restart the server
+after changing model settings.
 
 | Command | Purpose |
 | --- | --- |
@@ -400,9 +426,23 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
   are skipped. Self messages provide context without triggering replies; manual
   replies arriving during generation invalidate the pending answer.
 - **Media:** Text, images, and optional STT voice input are supported; video,
-  stickers, and files are skipped. Up to four images per snapshot, each at most 5 MiB, are loaded lazily.
+  stickers, and files are skipped. The latest four new images per snapshot, each at most 5 MiB, are attached directly.
   Models receiving them must support image input. Pending media gets bounded
   retries; unavailable images are labeled rather than guessed.
+  With `read_image` enabled, images in retained snapshot messages are also downloaded
+  into `<conversation-hash>.images.json` beside the conversation memory file.
+  Older images are represented by source labels in `cachedImages`; the tool attaches
+  a requested image as native image input on the next model round. Models with
+  `supportsImageToolResults: true` receive image IDs only in the initial input and
+  receive requested images directly in tool results. Both repliers
+  and model filters can use it. Lookups are restricted to the current account and
+  conversation and work after restart. Images expire three days after the original
+  source timestamp; lookup never refreshes expiry. Cleanup runs at startup and
+  hourly, and expired entries cannot be retrieved between cleanups. Each conversation
+  keeps at most 30 images and 64 MiB of cache JSON, evicting the oldest first.
+  Recent cached-image labels have a 1,000-token prompt allowance; IDs retained in
+  memory can still retrieve images omitted from that list. Without `read_image`,
+  images are attached directly without persistent image caching.
 - **Replies:** Normally 1–2 short sentences, with a 150-token target and 200-token
   hard cap. Citations are included when explicitly requested or required by hosted tools. Oversized text
   is truncated locally. Malformed reply JSON or memory updates are logged in
@@ -410,8 +450,9 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
   invalid result stops delivery.
 - **Memory:** Compact notes and confirmed replies persist per conversation for
   three days, capped at 1,000 tokens by default (`messager.memoryTokenLimit`). This is summarized context, not a raw
-  message archive. Image bytes are not saved in memory.
-- **Tools:** `web_search` (DuckDuckGo), `read_url`, `calculate`, and `current_time`
+  message archive. Image bytes live in the separate image cache and do not count
+  toward the text memory budget.
+- **Tools:** `web_search` (DuckDuckGo), `read_url`, `calculate`, `current_time`, and `read_image`
   are enabled by default. Models need Responses API function calling to use them.
   Page reading supports public HTTP(S) text/HTML/JSON, not PDFs or authenticated
   pages. Set `messager.localTools` to select a subset or disable local tools.

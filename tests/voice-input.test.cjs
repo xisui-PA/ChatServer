@@ -308,6 +308,8 @@ test('startup includes the optional STT model in provider resolution', async (t)
   const server = new ChatServer(options, '/unused');
   server.memory.start = async () => {};
   server.memory.close = async () => {};
+  server.images.start = async () => {};
+  server.images.close = async () => {};
   server.buildChats = () => [];
   const resolved = [];
   t.mock.method(ModelRegistry, 'load', async (_dir, references) => { resolved.push(...references); return {}; });

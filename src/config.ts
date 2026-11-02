@@ -20,7 +20,7 @@ export interface MessagerSpec {
   memoryTokenLimit?: number;
   /** Sender ID authorized to query server status in a direct chat. */
   mainAccount?: string;
-  /** Local names or { type } objects; omitted enables all four built-ins, [] disables them. */
+  /** Local names or { type } objects; omitted enables all built-ins, [] disables them. */
   localTools?: readonly LocalToolSpec[];
   /** Hosted type strings or definition objects; omitted or [] disables hosted tools. */
   apiTools?: readonly ApiToolSpec[];

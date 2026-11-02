@@ -3,14 +3,16 @@ import { CurrentTimeTool } from './current-time';
 import { LocalToolSpec, Tool } from './interface';
 import { ReadUrlTool } from './read-url';
 import { WebSearchTool } from './web-search';
+import { ReadImageTool } from './read-image';
 
-export const DEFAULT_TOOL_NAMES: readonly string[] = ['web_search', 'read_url', 'calculate', 'current_time'];
+export const DEFAULT_TOOL_NAMES: readonly string[] = ['web_search', 'read_url', 'calculate', 'current_time', 'read_image'];
 
 const factories = new Map<string, () => Tool>([
   ['web_search', () => new WebSearchTool()],
   ['read_url', () => new ReadUrlTool()],
   ['calculate', () => new CalculateTool()],
-  ['current_time', () => new CurrentTimeTool()]
+  ['current_time', () => new CurrentTimeTool()],
+  ['read_image', () => new ReadImageTool()]
 ]);
 
 /** Registers a tool implementation, including replacement search backends. */

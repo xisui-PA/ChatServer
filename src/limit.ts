@@ -80,6 +80,12 @@ export const MAX_AUDIO_BYTES = 20 * 1_024 * 1_024;
 export const MAX_ENCODED_AUDIO_BYTES = 4 * Math.ceil(MAX_AUDIO_BYTES / 3);
 /** Maximum images attached to a single model snapshot. */
 export const MAX_IMAGES_PER_SNAPSHOT = 4;
+/** Maximum persisted images per conversation; oldest images are evicted first. */
+export const MAX_CACHED_IMAGES_PER_CONVERSATION = 30;
+/** Maximum bytes in a conversation's image map, separate from its text memory. */
+export const MAX_IMAGE_CACHE_FILE_BYTES = 64 * 1_024 * 1_024;
+/** Prompt allowance for references to older cached images, excluding image bytes. */
+export const CACHED_IMAGE_REFERENCE_TOKENS = 1_000;
 /** Maximum download attempts per image or voice source. */
 export const MAX_MEDIA_ATTEMPTS = 3;
 /** Extra JSON response bytes allowed around base64 media. */
