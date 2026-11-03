@@ -489,7 +489,8 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
 ## Runtime behavior
 
 - **Queue:** One FIFO entry per conversation. Each turn uses messages since the last
-  successful reply, capped at the latest 30 source messages. New arrivals update
+  successful reply or replier decision to stay silent, capped at the latest 30 source
+  messages. Filter denials retain messages for later turns. New arrivals update
   pending context. Processing and sending are sequential, paced at 1–3 minutes.
 - **History:** Messages from before startup, including those received while stopped,
   are skipped. Self messages provide context without triggering replies; manual
@@ -521,8 +522,9 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
   invalid result stops delivery.
 - **Memory:** Compact notes and confirmed replies persist per conversation for
   three days, capped at 1,000 tokens by default (`messager.memoryTokenLimit`). This is summarized context, not a raw
-  message archive. Image bytes live in the separate image cache and do not count
-  toward the text memory budget.
+  message archive. Replier memory updates are saved even when it chooses not to reply;
+  filter denials skip the replier and its memory updates. Image bytes live in the
+  separate image cache and do not count toward the text memory budget.
 - **Tools:** `web_search` (DuckDuckGo), `read_url`, `calculate`, `current_time`, and `read_image`
   are enabled by default. Models need Responses API function calling to use them.
   Page reading supports public HTTP(S) text/HTML/JSON, not PDFs or authenticated

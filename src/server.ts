@@ -59,7 +59,7 @@ interface ResolvedChat {
   contextFile?: MessagerContextFile;
 }
 
-/** Bounded context since the last successful reply, plus scheduling state. */
+/** Bounded context awaiting delivery or a replier decision to stay silent, plus scheduling state. */
 interface ConversationState {
   chat: ResolvedChat;
   memoryKey: string;
@@ -492,7 +492,7 @@ export class ChatServer {
     }, wait);
   }
 
-  /** Returns true only after a snapshot's reply is successfully delivered. */
+  /** Returns true when a snapshot is consumed by successful delivery or replier silence. */
   private async handleMessage(conversation: ConversationState, message: IncomingMessage, selfRevision: number): Promise<boolean> {
     const { chat, memoryKey } = conversation;
     if (this.closed) {
@@ -591,7 +591,7 @@ export class ChatServer {
     }
     if (reply === undefined) {
       console.log(`[chat:${chat.name}] skipped reply to ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}: replier "${chat.replierModel}" chose not to reply`);
-      return false;
+      return true;
     }
     if (reply.voice) {
       if (chat.tts === undefined) {

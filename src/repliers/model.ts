@@ -92,6 +92,7 @@ export class ModelReplier implements Replier {
       `Keep concise, nonduplicative summaries, sender-attributed facts, unresolved questions, and labeled inferences; omit speculation and trivial details. Memory notes and confirmed replies share a separate budget of ${this.memoryTokenLimit} tokens, including metadata, and expire ${MEMORY_RETENTION_MS / (24 * 60 * 60 * 1000)} days after their earliest original source. Summarize or forget older notes to leave space for new context.`,
       'In memory sourceIds, record supporting snapshot message IDs, cached image source message IDs, or existing memory note/reply IDs. Reuse old note IDs when summarizing; never use unrelated newer messages to refresh old facts.',
       'Forget notes that are resolved, contradicted, or summarized; leave others unchanged. Only the application records successful delivery in memory.replies; never claim your proposed reply was sent.',
+      'Snapshot messages leave the pending buffer after a successful reply or a decision to stay silent. Save useful context in memoryUpdates even when you do not reply.',
       outcome === FilterOutcome.Allowed
         ? 'Filters require a reply if supported requests remain.'
         : 'Reply only if useful; otherwise stay silent.',
