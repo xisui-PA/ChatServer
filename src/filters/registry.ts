@@ -21,6 +21,8 @@ export interface FilterFactoryContext {
   modelReference?: string;
   /** Server shutdown cancellation for model requests. */
   signal?: AbortSignal;
+  /** Whether the reply pipeline can generate images using its provider. */
+  imageGenerationEnabled?: boolean;
 }
 
 /**
@@ -143,5 +145,5 @@ registerFilter('model', (options, context) => {
     }
   }
   const instructions = stringOption(options, 'instructions', 'model filter');
-  return new ModelFilter(context.model, instructions, context.signal, context.modelReference);
+  return new ModelFilter(context.model, instructions, context.signal, context.modelReference, context.imageGenerationEnabled);
 });

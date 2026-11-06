@@ -11,6 +11,11 @@ export function boundedText(text: string, tokens: number): string {
 export function modelInputTokens(input: string | readonly ResponseItem[], instructions: string, tools: unknown = []): number {
   let images = 0;
   const json = JSON.stringify({ input, instructions, tools }, (key, value: unknown) => {
+    if (typeof value === 'object' && value !== null && 'type' in value &&
+      value.type === 'image_generation_call' && 'result' in value && typeof value.result === 'string') {
+      images += 1;
+      return { ...value, result: '[generated image]' };
+    }
     if (key === 'image_url') {
       images += 1;
       return '[image]';

@@ -120,6 +120,10 @@ Each `chats` entry has a `messager` and optional `filters`:
 | `messager.mainAccount` | Optional exact sender ID allowed to query `/status` in a direct chat |
 | `messager.localTools` | Local tool names or `{ "type": "name" }` objects; omitted enables all five built-ins, `[]` disables local tools |
 | `messager.apiTools` | Hosted tool type strings or definition objects; omitted or `[]` enables none |
+| `messager.imageGeneration` | Optional boolean; omitted enables generation when `apiTools` includes `image_generation`; `true` adds that tool, `false` removes it |
+| `messager.imageWidthLimit` | Maximum generated image width in pixels; defaults to `1024` |
+| `messager.imageHeightLimit` | Maximum generated image height in pixels; defaults to `1024` |
+| `messager.dailyImageGenLimit` | Daily image generation allowance shared across this messager's conversations; defaults to `10`; `0` disables it |
 | `messager.options` | Adapter settings below |
 | `filters` | Ordered filters; omitted or `[]` skips filtering |
 | `stt` | Optional object with `type: "model"`, required `model`, and optional `audioConversionCmd`; omitted disables voice input |
@@ -153,17 +157,82 @@ documented tool configuration; hosted tools are not discovered automatically.
 The provider validates support and tool-specific options, and unsupported requests
 fail rather than silently falling back to local tools. `function` and `custom`
 definitions are rejected here: register application-executed functions as local
-tools instead. Only hosted tools that finish at the provider and return text are
-supported; client execution, approval exchanges, and generated artifact delivery
-are not implemented. Filters and formatting repairs receive neither tool set.
-Set both fields to `[]` to disable all tool calling.
+tools instead. Hosted tools must finish at the provider; text and generated image
+results are supported. Client execution, approval exchanges, and other generated
+artifacts are not implemented. Filters and formatting repairs receive no hosted
+tools. Set both fields to `[]` and omit or disable `imageGeneration` to disable
+all tool calling.
 
 Each generation attempt allows up to eight local calls and eight hosted calls
 across its model rounds, under the provider's existing timeout. Hosted requests
 send `max_tool_calls` with the remaining hosted budget; providers must support
 this Responses API parameter to enforce the cap during a response. All output
 items, including hosted calls and reasoning, are replayed when local calls need
-another round. Full-generation retries can repeat hosted calls and their charges.
+another round. Full-generation retries can repeat hosted calls and their charges;
+completed image artifacts are preserved and reused across these retries.
+
+Image generation uses the replier's provider-hosted
+[`image_generation` Responses tool](https://developers.openai.com/api/docs/guides/tools-image-generation).
+The selected provider/model must support this tool; there is no separate image
+provider or fallback. Put these settings inside `messager`:
+
+```json
+{
+  "imageGeneration": true,
+  "imageWidthLimit": 1024,
+  "imageHeightLimit": 1024,
+  "dailyImageGenLimit": 10
+}
+```
+
+Alternatively, include `"image_generation"` in `apiTools` and omit
+`imageGeneration` to detect support from that selection. A definition object can
+specify provider options such as `quality` or the hosted image `model`. Explicit
+`imageGeneration: false` overrides that tool selection. The reply model generates
+or edits images only for explicit requests. Model filters recognize these requests
+when generation is enabled, and WeChat sends returned bytes as image messages,
+with an optional caption. Image-only responses are supported.
+
+`imageWidthLimit` and `imageHeightLimit` are independent integer pixel limits from
+1 to 16384, each defaulting to 1024. ChatServer combines them into the provider's
+`WIDTHxHEIGHT` size string; the provider must support the requested size. The tool
+receives this size unless its configured concrete size fits within both limits.
+`auto` and larger sizes are replaced by the combined limits. ChatServer requests PNG
+and rejects returned images exceeding either dimension or the existing 5 MiB
+image byte limit. Image bytes stay outside reply JSON and conversation memory;
+confirmed memory records an image-delivery marker, any caption, and `imageIds`
+linking the reply to its generated cache entries. These IDs count toward the
+memory budget and allow `read_image` lookup after older labels leave `cachedImages`.
+
+Generated images are saved in the conversation's existing image store as soon as
+their provider output is validated, before later model rounds, formatting repair,
+or delivery, including when `read_image` is disabled. If later model work fails,
+the artifact remains cached; retries reuse the completed image without another
+image generation call. They share the received-image
+limits: three days from caching, at most 30 images, and 64 MiB of cache JSON per
+conversation. Entries have their own generated-image IDs, assistant attribution,
+`origin: "generated"`, and a `deliveryStatus` of `pending`, `sent`, or `failed`.
+Only `sent` confirms delivery; failed or interrupted sends may remain unconfirmed.
+Updating delivery status never extends retention. Cache write failures are logged
+and do not block sending.
+
+When `read_image` is enabled, generated image references appear in `cachedImages`
+and their bytes can be inspected in later turns, including after a restart or
+failed upload. Caching does not resend images, and no resend tool is provided.
+
+Quota is kept only in memory for each configured messager pipeline, shared across
+its conversations and generation retries. Usage resets on server restart and at
+midnight in the server's local timezone. No quota files are read or written.
+Before each image-capable provider request, ChatServer
+reserves one slot and sets `max_tool_calls: 1` (also limiting other hosted calls
+in that response). An unused slot is released when a response confirms no image
+call occurred. Ambiguous provider failures retain their reservation; failed
+delivery or rejected image bytes do not refund generation charges. Once an image
+is generated, further local-tool rounds and model retries cannot generate another
+for that reply. When quota is exhausted, image generation is removed from the
+request and text replies remain available. WeChat image delivery uses the existing
+[`/api/messages/send` image payload](https://github.com/thisnick/agent-wechat/blob/5472a168956ad5d09d3063342e691448980a5c31/packages/agent-server-rust/src/router/messages.rs#L144)
+and is never automatically retried after an uncertain send.
 
 Provider URL citations are preserved as complete source links in outgoing text,
 including after a formatting repair. Text is shortened to reserve room for links;
@@ -420,7 +489,8 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
 ## Runtime behavior
 
 - **Queue:** One FIFO entry per conversation. Each turn uses messages since the last
-  successful reply, capped at the latest 30 source messages. New arrivals update
+  successful reply or replier decision to stay silent, capped at the latest 30 source
+  messages. Filter denials retain messages for later turns. New arrivals update
   pending context. Processing and sending are sequential, paced at 1–3 minutes.
 - **History:** Messages from before startup, including those received while stopped,
   are skipped. Self messages provide context without triggering replies; manual
@@ -442,7 +512,9 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
   keeps at most 30 images and 64 MiB of cache JSON, evicting the oldest first.
   Recent cached-image labels have a 1,000-token prompt allowance; IDs retained in
   memory can still retrieve images omitted from that list. Without `read_image`,
-  images are attached directly without persistent image caching.
+  received images are attached directly without persistent image caching.
+  Generated images are always cached before delivery; `read_image` is required
+  for model inspection of these cached artifacts.
 - **Replies:** Normally 1–2 short sentences, with a 150-token target and 200-token
   hard cap. Citations are included when explicitly requested or required by hosted tools. Oversized text
   is truncated locally. Malformed reply JSON or memory updates are logged in
@@ -450,8 +522,9 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
   invalid result stops delivery.
 - **Memory:** Compact notes and confirmed replies persist per conversation for
   three days, capped at 1,000 tokens by default (`messager.memoryTokenLimit`). This is summarized context, not a raw
-  message archive. Image bytes live in the separate image cache and do not count
-  toward the text memory budget.
+  message archive. Replier memory updates are saved even when it chooses not to reply;
+  filter denials skip the replier and its memory updates. Image bytes live in the
+  separate image cache and do not count toward the text memory budget.
 - **Tools:** `web_search` (DuckDuckGo), `read_url`, `calculate`, `current_time`, and `read_image`
   are enabled by default. Models need Responses API function calling to use them.
   Page reading supports public HTTP(S) text/HTML/JSON, not PDFs or authenticated

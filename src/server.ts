@@ -12,7 +12,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { ChatServerOptions } from './config';
 import { evaluateFilters, FilterAdapter, FilterOutcome } from './filters/interface';
 import { createFilter } from './filters/registry';
-import { ConversationMessage, IncomingMessage, MessagerAdapter, OutgoingMessage } from './messagers/interface';
+import { ConversationMessage, ImageFile, IncomingMessage, MessagerAdapter, OutgoingMessage } from './messagers/interface';
 import { createMessager } from './messagers/registry';
 import { Replier } from './repliers/interface';
 import { ModelReplier } from './repliers/model';
@@ -26,6 +26,7 @@ import { PendingMediaError } from './models/pending-media';
 import { VoiceTranscriber } from './models/voice-transcriber';
 import { MessagerContextFile } from './messagers/context-file';
 import { VoiceSynthesizer } from './models/voice-synthesizer';
+import { ImageGenerationPolicy } from './models/image-generation';
 
 export * from './filters/interface';
 export * from './filters/ignore-file';
@@ -58,7 +59,7 @@ interface ResolvedChat {
   contextFile?: MessagerContextFile;
 }
 
-/** Bounded context since the last successful reply, plus scheduling state. */
+/** Bounded context awaiting delivery or a replier decision to stay silent, plus scheduling state. */
 interface ConversationState {
   chat: ResolvedChat;
   memoryKey: string;
@@ -134,12 +135,13 @@ export class ChatServer {
       const name = `chat-${index + 1}`;
       const memoryTokenLimit = definition.messager.memoryTokenLimit ?? DEFAULT_MEMORY_TOKEN_LIMIT;
       const localTools = createTools(definition.messager.localTools);
+      const imageGeneration = new ImageGenerationPolicy(definition.messager, definition.messager.apiTools);
       return {
         name,
         mainAccount: definition.messager.mainAccount,
         replier: new ModelReplier(
           models.get(definition.messager.replier), localTools, definition.messager.persona,
-          memoryTokenLimit, definition.tts !== undefined, definition.messager.apiTools
+          memoryTokenLimit, definition.tts !== undefined, definition.messager.apiTools, imageGeneration
         ),
         replierModel: definition.messager.replier,
         memoryTokenLimit,
@@ -165,6 +167,7 @@ export class ChatServer {
             messagerType: definition.messager.name,
             model: spec.model === undefined ? undefined : models.get(spec.model),
             modelReference: spec.model,
+            imageGenerationEnabled: imageGeneration.enabled,
             signal: this.shutdown.signal
           })
         )
@@ -489,16 +492,32 @@ export class ChatServer {
     }, wait);
   }
 
-  /** Returns true only after a snapshot's reply is successfully delivered. */
+  /** Returns true when a snapshot is consumed by successful delivery or replier silence. */
   private async handleMessage(conversation: ConversationState, message: IncomingMessage, selfRevision: number): Promise<boolean> {
     const { chat, memoryKey } = conversation;
     if (this.closed) {
       return false;
     }
     console.log(`[chat:${chat.name}] processing ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}`);
+    const generatedImages = new Map<ImageFile, string | undefined>();
+    const cacheGeneratedImages = async (images: readonly ImageFile[]): Promise<void> => {
+      const uncached = images.filter((image) => !generatedImages.has(image));
+      if (uncached.length === 0) {
+        return;
+      }
+      // Remember attempts too: a cache error must not cause duplicate writes later in this turn.
+      uncached.forEach((image) => generatedImages.set(image, undefined));
+      try {
+        const ids = await this.images.saveGenerated(memoryKey, uncached);
+        uncached.forEach((image, index) => generatedImages.set(image, ids[index]));
+      } catch (error) {
+        console.warn(`[chat:${chat.name}] unable to cache generated images:`, error);
+      }
+    };
     message = {
       ...message, additionalContext: await chat.contextFile?.load(),
-      imageAccess: chat.imageLookupEnabled ? this.images.forConversation(memoryKey) : undefined
+      imageAccess: chat.imageLookupEnabled ? this.images.forConversation(memoryKey) : undefined,
+      onGeneratedImages: cacheGeneratedImages
     };
     try {
       message = { ...message, memory: await this.memory.load(memoryKey, chat.memoryTokenLimit) };
@@ -534,6 +553,10 @@ export class ChatServer {
       throw new SupersededTurnError();
     }
     const result = await chat.replier.replyTo(message, outcome, this.shutdown.signal);
+    // Custom repliers may return image bytes without invoking the immediate artifact sink.
+    await cacheGeneratedImages(result.reply?.images ?? []);
+    const generatedImageIds = (result.reply?.images ?? []).map((image) => generatedImages.get(image))
+      .filter((id): id is string => id !== undefined);
     if (conversation.selfRevision !== selfRevision) {
       throw new SupersededTurnError();
     }
@@ -557,6 +580,9 @@ export class ChatServer {
       console.error(`[chat:${chat.name}] failed to save conversation notes:`, error);
     }
     let reply = result.reply;
+    if (reply !== undefined && generatedImageIds.length > 0) {
+      reply = { ...reply, imageIds: generatedImageIds };
+    }
     if (conversation.selfRevision !== selfRevision) {
       throw new SupersededTurnError();
     }
@@ -565,7 +591,7 @@ export class ChatServer {
     }
     if (reply === undefined) {
       console.log(`[chat:${chat.name}] skipped reply to ${message.messages?.length ?? 1} message(s) in ${message.channel ?? message.senderId}: replier "${chat.replierModel}" chose not to reply`);
-      return false;
+      return true;
     }
     if (reply.voice) {
       if (chat.tts === undefined) {
@@ -579,7 +605,15 @@ export class ChatServer {
         return false;
       }
     }
-    if (await this.deliverReply(chat, message, reply)) {
+    const delivered = await this.deliverReply(chat, message, reply);
+    if (generatedImageIds.length > 0) {
+      try {
+        await this.images.recordGeneratedDelivery(memoryKey, generatedImageIds, delivered);
+      } catch (error) {
+        console.warn(`[chat:${chat.name}] unable to record generated image delivery:`, error);
+      }
+    }
+    if (delivered) {
       // A persistence failure must not turn confirmed delivery into a retry.
       try {
         await this.memory.recordReply(memoryKey, reply, chat.memoryTokenLimit);

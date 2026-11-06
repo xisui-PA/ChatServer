@@ -5,7 +5,7 @@ import {
   CONVERSATION_ID_TOKENS, MAX_CACHED_IMAGES_PER_CONVERSATION, MAX_IMAGE_CACHE_FILE_BYTES, MAX_MEMORY_ID_CHARS,
   MEMORY_CLEANUP_INTERVAL_MS, MEMORY_RETENTION_MS, SENDER_NAME_TOKENS
 } from '../limit';
-import { ConversationMessage, IncomingImage } from '../messagers/interface';
+import { ConversationMessage, ImageFile as GeneratedImageFile, IncomingImage } from '../messagers/interface';
 import { imageDataUrl } from '../messagers/images';
 import { boundedText } from '../models/input-budget';
 
@@ -17,6 +17,10 @@ export interface CachedImageReference {
   senderName?: string;
   timestamp: string;
   expiresAt: string;
+  /** Omitted for received images; generated artifacts are never attributed to a user. */
+  origin?: 'generated';
+  /** A failed send is unconfirmed and may still have reached the remote chat. */
+  deliveryStatus?: 'pending' | 'sent' | 'failed';
 }
 
 export interface CachedImage extends CachedImageReference {
@@ -44,6 +48,15 @@ function validateDataUrl(value: string): string {
   return value;
 }
 
+/** Keeps generation and delivery labels in references without including image bytes. */
+function imageReference(image: CachedImage): CachedImageReference {
+  return {
+    id: image.id, messageId: image.messageId, senderId: image.senderId,
+    senderName: image.senderName, timestamp: image.timestamp, expiresAt: image.expiresAt,
+    ...(image.origin === 'generated' ? { origin: image.origin, deliveryStatus: image.deliveryStatus } : {})
+  };
+}
+
 /** Stores image bytes separately from token-bounded conversation notes. */
 export class ConversationImageStore {
   private readonly directory: string;
@@ -69,14 +82,11 @@ export class ConversationImageStore {
   }
 
   public forConversation(key: string): ConversationImageAccess {
-    const filePath = path.join(this.directory, `${createHash('sha256').update(key).digest('hex')}.images.json`);
+    const filePath = this.filePath(key);
     return {
       list: () => this.run(async () => {
         const images = await this.read(filePath);
-        return Object.values(images).map((image) => ({
-          id: image.id, messageId: image.messageId, senderId: image.senderId,
-          senderName: image.senderName, timestamp: image.timestamp, expiresAt: image.expiresAt
-        }));
+        return Object.values(images).map(imageReference);
       }),
       get: (id) => this.run(async () => {
         const image = (await this.read(filePath))[id];
@@ -107,6 +117,54 @@ export class ConversationImageStore {
     };
   }
 
+  /** Persists completed artifacts before transport delivery, even when read_image is disabled. */
+  public saveGenerated(key: string, files: readonly GeneratedImageFile[]): Promise<readonly string[]> {
+    return this.run(async () => {
+      const filePath = this.filePath(key);
+      const images = await this.read(filePath);
+      const now = Date.now();
+      const ids: string[] = [];
+      for (const file of files) {
+        const dataUrl = imageDataUrl(Buffer.from(file.data).toString('base64'));
+        if (!dataUrl.startsWith(`data:${file.mimeType};`)) {
+          throw new Error('Generated image MIME type does not match its bytes.');
+        }
+        const id = `generated-image:${randomUUID()}`;
+        images[id] = {
+          id, messageId: id, senderId: 'assistant', senderName: 'Assistant', origin: 'generated',
+          deliveryStatus: 'pending', timestamp: new Date(now).toISOString(),
+          expiresAt: new Date(now + MEMORY_RETENTION_MS).toISOString(), dataUrl
+        };
+        ids.push(id);
+      }
+      await this.write(filePath, images);
+      return ids;
+    });
+  }
+
+  /** Updates confirmation independently of retention; never schedules a resend. */
+  public recordGeneratedDelivery(key: string, ids: readonly string[], delivered: boolean): Promise<void> {
+    return this.run(async () => {
+      const filePath = this.filePath(key);
+      const images = await this.read(filePath);
+      let changed = false;
+      for (const id of ids) {
+        const image = images[id];
+        if (image?.origin === 'generated') {
+          image.deliveryStatus = delivered ? 'sent' : 'failed';
+          changed = true;
+        }
+      }
+      if (changed) {
+        await this.write(filePath, images);
+      }
+    });
+  }
+
+  private filePath(key: string): string {
+    return path.join(this.directory, `${createHash('sha256').update(key).digest('hex')}.images.json`);
+  }
+
   private run<T>(operation: () => Promise<T>): Promise<T> {
     const task = this.operations.then(operation);
     this.operations = task.then(() => {}, () => {});
@@ -131,13 +189,17 @@ export class ConversationImageStore {
           typeof image.messageId !== 'string' || !image.messageId || image.messageId.length > MAX_MEMORY_ID_CHARS ||
           typeof image.senderId !== 'string' || typeof image.timestamp !== 'string' ||
           !Number.isFinite(Date.parse(image.timestamp)) || typeof image.dataUrl !== 'string' ||
-          (image.senderName !== undefined && typeof image.senderName !== 'string')) {
+          (image.senderName !== undefined && typeof image.senderName !== 'string') ||
+          (image.origin !== undefined && image.origin !== 'generated') ||
+          (image.origin === 'generated'
+            ? !['pending', 'sent', 'failed'].includes(image.deliveryStatus ?? '')
+            : image.deliveryStatus !== undefined)) {
           throw new Error('Invalid cached image entry.');
         }
         const timestamp = Date.parse(image.timestamp);
         if (timestamp <= now && timestamp + MEMORY_RETENTION_MS > now) {
           images[id] = {
-            id, messageId: image.messageId, senderId: boundedText(image.senderId, CONVERSATION_ID_TOKENS),
+            ...imageReference(image), senderId: boundedText(image.senderId, CONVERSATION_ID_TOKENS),
             senderName: image.senderName ? boundedText(image.senderName, SENDER_NAME_TOKENS) : undefined,
             timestamp: image.timestamp, expiresAt: new Date(timestamp + MEMORY_RETENTION_MS).toISOString(), dataUrl: image.dataUrl
           };

@@ -1,5 +1,6 @@
 import {
   DEFAULT_MEMORY_TOKEN_LIMIT,
+  MAX_CACHED_IMAGES_PER_CONVERSATION,
   MAX_MEMORY_FILE_BYTES,
   MAX_MEMORY_ID_CHARS,
   MAX_MEMORY_TOKEN_LIMIT,
@@ -26,6 +27,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isTimestamp(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
+}
+
+/** Keeps cache links bounded and supports memory files written before image generation. */
+function imageIds(value: unknown): readonly string[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value) || value.length > MAX_CACHED_IMAGES_PER_CONVERSATION ||
+    !value.every((id: unknown) => typeof id === 'string' && id.length > 0 && id.length <= MAX_MEMORY_ID_CHARS)) {
+    throw new Error('Invalid stored reply image IDs.');
+  }
+  return [...new Set(value as string[])];
 }
 
 /** Parses only supported fields; expiry is always derived from source time. */
@@ -57,6 +70,7 @@ function parseFile(value: unknown): ConversationMemory {
     return {
       id: reply.id,
       text: reply.text,
+      ...(reply.imageIds !== undefined ? { imageIds: imageIds(reply.imageIds) } : {}),
       sentAt: reply.sentAt,
       expiresAt: new Date(Date.parse(reply.sentAt) + MEMORY_RETENTION_MS).toISOString(),
       channel: reply.channel,
@@ -187,7 +201,8 @@ export class ConversationMemoryStore {
       const memory = prune(await this.read(filePath), now, tokenLimit);
       const sent: SentReply = {
         id: `reply:${randomUUID()}`,
-        text: reply.text,
+        text: reply.images?.length ? `[Generated ${reply.images.length} image(s)]${reply.text ? ` ${reply.text}` : ''}` : reply.text,
+        ...(reply.imageIds !== undefined ? { imageIds: imageIds(reply.imageIds) } : {}),
         sentAt: new Date(now).toISOString(),
         expiresAt: new Date(now + MEMORY_RETENTION_MS).toISOString(),
         channel: reply.channel,

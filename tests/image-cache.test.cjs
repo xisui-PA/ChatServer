@@ -94,6 +94,69 @@ test('image maps persist across restart, isolate conversations, and contain no p
   assert.deepEqual(await restarted.forConversation('account-a/chat-a').get('image:1'), await access.get('image:1'));
 });
 
+test('generated artifacts persist with separate assistant provenance, delivery labels, and conversation isolation', async t => {
+  const { directory, store, access } = await fixture(t);
+  const received = source(1);
+  await access.save(received, received.images[0], dataUrl);
+  const image = { data: Buffer.from(dataUrl.split(',')[1], 'base64'), mimeType: 'image/png', filename: 'generated.png' };
+  const [id] = await store.saveGenerated('account-a/chat-a', [image]);
+  assert.match(id, /^generated-image:/);
+  const generated = await access.get(id);
+  assert.equal(generated.origin, 'generated');
+  assert.equal(generated.senderId, 'assistant');
+  assert.equal(generated.messageId, id);
+  assert.equal(generated.deliveryStatus, 'pending');
+  assert.equal(generated.dataUrl, dataUrl);
+  assert.equal((await access.get('image:1')).origin, undefined);
+  assert.equal(await store.forConversation('account-b/chat-a').get(id), undefined);
+  const reference = (await access.list()).find(image => image.id === id);
+  assert.equal(reference.dataUrl, undefined);
+  assert.equal(reference.origin, 'generated');
+  assert.equal(reference.deliveryStatus, 'pending');
+  await store.recordGeneratedDelivery('account-a/chat-a', [id], false);
+  await store.close();
+  const restarted = new ConversationImageStore(directory);
+  await restarted.start();
+  t.after(() => restarted.close());
+  const restored = await restarted.forConversation('account-a/chat-a').get(id);
+  assert.equal(restored.deliveryStatus, 'failed');
+  assert.equal(restored.dataUrl, dataUrl);
+  const snapshot = JSON.parse(await createConversationInput({
+    senderId: 'alice', text: 'What was in the generated image?', imageAccess: restarted.forConversation('account-a/chat-a')
+  }));
+  assert.equal(snapshot.cachedImages.at(-1).origin, 'generated');
+  assert.equal(snapshot.cachedImages.at(-1).deliveryStatus, 'failed');
+  const retrieved = await new ToolRunner([new ReadImageTool(restarted.forConversation('account-a/chat-a'))])
+    .execute('read_image', JSON.stringify({ imageId: id }));
+  assert.equal(retrieved.images[0].dataUrl, dataUrl);
+  assert.equal(retrieved.images[0].origin, 'generated');
+});
+
+test('generated artifacts share cache eviction and expiry without delivery updates refreshing retention', async t => {
+  const { directory, store, access } = await fixture(t);
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  const image = { data: Buffer.from(dataUrl.split(',')[1], 'base64'), mimeType: 'image/png', filename: 'generated.png' };
+  const received = source(1, new Date(now - 1000).toISOString());
+  await access.save(received, received.images[0], dataUrl);
+  const ids = await store.saveGenerated('account-a/chat-a', Array(MAX_CACHED_IMAGES_PER_CONVERSATION).fill(image));
+  assert.equal((await access.list()).length, MAX_CACHED_IMAGES_PER_CONVERSATION);
+  assert.equal(await access.get('image:1'), undefined);
+  const original = await access.get(ids[0]);
+  now += 60_000;
+  await store.recordGeneratedDelivery('account-a/chat-a', [ids[0]], true);
+  const updated = await access.get(ids[0]);
+  assert.equal(updated.deliveryStatus, 'sent');
+  assert.equal(updated.timestamp, original.timestamp);
+  assert.equal(updated.expiresAt, original.expiresAt);
+  now = Date.parse(original.timestamp) + MEMORY_RETENTION_MS;
+  assert.equal(await access.get(ids[0]), undefined);
+  await store.recordGeneratedDelivery('account-a/chat-a', ids, false);
+  assert.deepEqual(await access.list(), []);
+  await store.cleanup();
+  assert.deepEqual(await fs.readdir(path.join(directory, 'conversations')), []);
+});
+
 test('image expiry uses original source time, is checked on lookup, and cleanup removes only image files', async t => {
   const { directory, store, access } = await fixture(t);
   let now = Date.now();

@@ -9,7 +9,9 @@
   },
   "files": [
     "dist",
-    "schemas"
+    "schemas",
+    "THIRD_PARTY_NOTICES.txt",
+    "LICENSE"
   ],
   "scripts": {
     "prepare": "npm run build",
@@ -17,6 +19,7 @@
     "build:dev": "webpack --mode development",
     "watch": "webpack --mode development --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --require ts-node/register/transpile-only --test tests/*.test.cjs",
     "model:add": "node --enable-source-maps dist/models/chatserver-models.js add",
     "model:test": "node --enable-source-maps dist/models/chatserver-models.js test",
     "model:test-stt": "node --enable-source-maps dist/models/chatserver-models.js test-stt",
