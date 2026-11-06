@@ -1,5 +1,5 @@
 {
-  "name": "chatserver",
+  "name": "@xisui-pa/chatserver",
   "version": "1.0.0",
   "description": "A bridge between messager apps and LLM models built with TypeScript",
   "main": "dist/index.js",
@@ -40,6 +40,10 @@
     "bridge"
   ],
   "license": "MIT",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "engines": {
     "node": "^22.22.2 || >=24.15.0"
   },
