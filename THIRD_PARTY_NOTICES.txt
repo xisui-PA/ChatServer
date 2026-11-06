@@ -1,0 +1,179 @@
+ChatServer Third-Party Notices
+==============================
+
+This file contains the copyright notices and license texts of third-party
+software that is bundled into the released ChatServer distribution
+(the `dist/` output shipped in the npm package), including transitive and
+duplicated dependency versions.
+
+MAINTAINERS: Refresh this file whenever a bundled dependency is added,
+removed, or its version (or upstream license text) changes. Determine the
+bundled set from the runtime source maps (dist/index.js.map and
+dist/models/chatserver-models.js.map) and/or `package-lock.json`, then copy
+each package's complete upstream license verbatim. Do not substitute the
+ChatServer (MIT) license for a dependency's license, and do not alter the
+copyright holder names.
+
+==========================================================================
+Section 1
+Package: base64-js
+Version: 1.5.1
+License: MIT (The MIT License)
+Provenance: node_modules/base64-js/LICENSE
+            https://registry.npmjs.org/base64-js/-/base64-js-1.5.1.tgz
+==========================================================================
+
+The MIT License (MIT)
+
+Copyright (c) 2014 Jameson Little
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+
+==========================================================================
+Section 2
+Package: dom-serializer
+Version: 2.0.0
+License: MIT (The MIT License)
+Provenance: node_modules/dom-serializer/LICENSE
+            https://registry.npmjs.org/dom-serializer/-/dom-serializer-2.0.0.tgz
+==========================================================================
+
+License
+
+(The MIT License)
+
+Copyright (c) 2014 The cheeriojs contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the 'Software'), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED 'AS IS', WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+==========================================================================
+Section 3
+Packages:
+  - domelementtype 2.3.0
+  - domhandler 5.0.3
+  - domutils 3.2.2
+  - entities 7.0.1 (top-level)
+  - entities 4.5.0 (nested under dom-serializer)
+License: BSD-2-Clause
+Provenance:
+  node_modules/domelementtype/LICENSE
+  node_modules/domhandler/LICENSE
+  node_modules/domutils/LICENSE
+  node_modules/entities/LICENSE
+  node_modules/dom-serializer/node_modules/entities/LICENSE
+  https://registry.npmjs.org/domelementtype/-/domelementtype-2.3.0.tgz
+  https://registry.npmjs.org/domhandler/-/domhandler-5.0.3.tgz
+  https://registry.npmjs.org/domutils/-/domutils-3.2.2.tgz
+  https://registry.npmjs.org/entities/-/entities-7.0.1.tgz
+  https://registry.npmjs.org/entities/-/entities-4.5.0.tgz
+
+The above packages share an identical BSD-2-Clause license text with the same
+copyright holder, so the text is included once here and applies to all of them.
+
+Copyright (c) Felix Böhm
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+THIS IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS,
+EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+==========================================================================
+Section 4
+Package: htmlparser2
+Version: 10.1.0
+License: MIT
+Provenance: node_modules/htmlparser2/LICENSE
+            https://registry.npmjs.org/htmlparser2/-/htmlparser2-10.1.0.tgz
+==========================================================================
+
+Copyright 2010, 2011, Chris Winberry <chris@winberry.net>. All rights reserved.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to
+deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.
+
+
+==========================================================================
+Section 5
+Package: js-tiktoken
+Version: 1.0.21
+License: MIT
+Provenance: The npm package (https://registry.npmjs.org/js-tiktoken/-/js-tiktoken-1.0.21.tgz)
+            declares "license": "MIT" but does not ship a LICENSE file. The
+            text below is the authoritative upstream license retrieved from the
+            project repository (repository field points to
+            https://github.com/dqbd/tiktoken), LICENSE file at the matching
+            js-tiktoken@1.0.21 release tag:
+            https://github.com/dqbd/tiktoken/blob/js-tiktoken%401.0.21/LICENSE
+==========================================================================
+
+MIT License
+
+Copyright (c) 2022 OpenAI, Shantanu Jain
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+Vendored / bundled data note: js-tiktoken is a pure-JavaScript port of
+OpenAI's tiktoken tokeniser (https://github.com/openai/tiktoken). The
+bundled rank file (dist/ranks/o200k_base.cjs) encodes the o200k_base BPE
+vocabulary derived from OpenAI's tokenizer. js-tiktoken is licensed under MIT
+(Copyright (c) 2022 OpenAI, Shantanu Jain), and the upstream OpenAI tiktoken
+project is likewise MIT-licensed; the MIT license above governs both the
+vendored implementation and the bundled rank data.

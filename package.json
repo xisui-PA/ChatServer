@@ -9,7 +9,9 @@
   },
   "files": [
     "dist",
-    "schemas"
+    "schemas",
+    "THIRD_PARTY_NOTICES.txt",
+    "LICENSE"
   ],
   "scripts": {
     "prepare": "npm run build",
