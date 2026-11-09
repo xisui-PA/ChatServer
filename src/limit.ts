@@ -112,18 +112,16 @@ export const MIN_VOICE_PADDING_MS = 500;
 export const MAX_VOICE_PADDING_MS = 2_000;
 /** Maximum characters submitted to a speech synthesis endpoint. */
 export const MAX_TTS_INPUT_CHARS = 4_096;
-/** Maximum wait for a WeChat voice job to confirm delivery. */
-export const WECHAT_VOICE_JOB_TIMEOUT_MS = 180_000;
-/** Interval between status checks of a submitted WeChat voice job. */
-export const WECHAT_VOICE_JOB_POLL_MS = 1_000;
-/** Deadline for a best-effort voice-job cancellation after failure or shutdown. */
-export const WECHAT_VOICE_CANCEL_TIMEOUT_MS = 5_000;
+/** Maximum wait for one WeChat text send or media job to confirm delivery. */
+export const WECHAT_SEND_TIMEOUT_MS = 180_000;
+/** Deadline for a best-effort send or job cancellation after failure or shutdown. */
+export const WECHAT_SEND_CANCEL_TIMEOUT_MS = 5_000;
 
 // Model requests, pacing, and transport defaults.
-/** Largest duration supported by Node timers; a platform bound. */
-export const MAX_TIMER_MS = 2_147_483_647;
+/** Maximum configured timeout or timer delay: one hour. */
+export const MAX_TIMER_MS = 60 * 60 * 1_000;
 /** Default provider deadline for generation and transcription requests. */
-export const DEFAULT_MODEL_TIMEOUT_MS = 180_000;
+export const DEFAULT_MODEL_TIMEOUT_MS = 300_000;
 /** Retries after the initial attempt of a complete model generation. */
 export const MAX_MODEL_RETRIES = 3;
 /** Delay between complete model-generation retries. */
@@ -142,18 +140,30 @@ export const MAX_REPLY_DELAY_MS = 180_000;
 export const MAX_PENDING_MEDIA_RETRIES = 2;
 /** Initial delay for pending-media retries; doubles on each retry. */
 export const PENDING_MEDIA_RETRY_DELAY_MS = 30_000;
-/** Default delay after a completed WeChat poll. */
-export const WECHAT_POLL_INTERVAL_MS = 30_000;
-/** Default deadline for each WeChat REST request. */
+/** Default base delay before reconnecting an interrupted WeChat event stream. */
+export const WECHAT_RECONNECT_INTERVAL_MS = 1_000;
+/** Default deadline for each WeChat REST request and SSE connect/idle wait. */
 export const WECHAT_REQUEST_TIMEOUT_MS = 30_000;
-/** Default maximum timestamp gap for adjacent same-sender bundles. */
-export const WECHAT_BUNDLE_GAP_MS = 20_000;
-/** Maximum exponent used by WeChat polling failure backoff. */
+/** Maximum wait for a WeChat stream reader to acknowledge cancellation. */
+export const WECHAT_READER_CANCEL_TIMEOUT_MS = 100;
+/** Maximum exponent used by WeChat event-stream reconnect backoff. */
 export const WECHAT_MAX_BACKOFF_EXPONENT = 6;
-/** Chat rows requested per WeChat API page. */
-export const WECHAT_CHAT_PAGE_SIZE = 100;
-/** Message rows requested per WeChat API page. */
-export const WECHAT_MESSAGE_PAGE_SIZE = 50;
+/** Maximum cached WeChat contact and group-member display names. */
+export const WECHAT_NAME_CACHE_SIZE = 1_000;
+/** Lifetime of a successfully resolved WeChat display name. */
+export const WECHAT_NAME_TTL_MS = 10 * 60_000;
+/** Lifetime of a failed or empty WeChat display-name lookup. */
+export const WECHAT_NAME_MISS_TTL_MS = 60_000;
+/** Largest signed 64-bit event cursor accepted from the WeChat daemon. */
+export const WECHAT_MAX_EVENT_CURSOR = 9_223_372_036_854_775_807n;
+/** Maximum characters buffered for one unterminated SSE line. */
+export const MAX_SSE_LINE_CHARS = 1_048_576;
+/** Maximum characters accepted in one SSE data payload. */
+export const MAX_SSE_FRAME_CHARS = 1_048_576;
+/** Maximum bytes read from a rejected SSE response body. */
+export const MAX_SSE_ERROR_BYTES = 16_384;
+/** Recent live message IDs retained for replay deduplication; cursors are the primary guard. */
+export const WECHAT_RECENT_MESSAGE_LIMIT = 2_000;
 /** Default interval between ignore-file reload checks; zero disables caching. */
 export const IGNORE_FILE_RELOAD_INTERVAL_MS = 1_000;
 

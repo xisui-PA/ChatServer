@@ -4,10 +4,11 @@ import { imageDataUrl } from '../messagers/images';
 import { ApiToolDefinition, ApiToolSpec } from '../tools/interface';
 import { parseApiTools } from '../tools/api';
 import type { ResponseItem } from './responses-client';
+import { isNumber, isString } from '../type-guards';
 
 /** Validates a numeric width or height limit in pixels. */
 export function parseImageDimension(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 16384) {
+  if (!isNumber(value) || !Number.isInteger(value) || value < 1 || value > 16384) {
     throw new Error('Image dimension must be an integer between 1 and 16384.');
   }
   return value;
@@ -15,7 +16,7 @@ export function parseImageDimension(value: unknown): number {
 
 /** Validates a concrete dimension limit; provider-specific supported sizes are checked remotely. */
 export function parseImageSize(value: unknown): { width: number; height: number } {
-  if (typeof value !== 'string' || !/^[1-9]\d{0,4}x[1-9]\d{0,4}$/.test(value)) {
+  if (!isString(value) || !/^[1-9]\d{0,4}x[1-9]\d{0,4}$/.test(value)) {
     throw new Error('Expected WIDTHxHEIGHT.');
   }
   const [width, height] = value.split('x').map(Number);
@@ -123,7 +124,7 @@ export class ImageGenerationPolicy {
 export function generatedImages(output: readonly ResponseItem[], size = `${DEFAULT_IMAGE_WIDTH_LIMIT}x${DEFAULT_IMAGE_HEIGHT_LIMIT}`): ImageFile[] {
   const limit = parseImageSize(size);
   return output.filter((item) => item.type === 'image_generation_call').map((item) => {
-    if (item.status !== 'completed' || typeof item.result !== 'string') {
+    if (item.status !== 'completed' || !isString(item.result)) {
       throw new Error('Provider returned an incomplete image generation result.');
     }
     const url = imageDataUrl(item.result);

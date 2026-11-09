@@ -1,6 +1,7 @@
 import { DEFAULT_MODEL_TIMEOUT_MS, MAX_SETUP_CHOICES, MODEL_DISCOVERY_TIMEOUT_MS } from '../limit';
 import { CliError, CommandLine, hasFlag, optionalValue, promptLine } from './cli-support';
 import { ModelsFile, ProviderConfig } from './model-store';
+import { isObject, isString } from '../type-guards';
 
 /** Reads an optional nonempty, trimmed command-line value. */
 export function setupValue(cli: CommandLine, key: string, flag: string): string | undefined {
@@ -126,11 +127,11 @@ export async function setupModelId(provider: ProviderConfig, apiKey: string): Pr
       throw new Error(`HTTP ${response.status}`);
     }
     const body: unknown = await response.json();
-    if (typeof body !== 'object' || body === null || !('data' in body) || !Array.isArray(body.data)) {
+    if (!isObject(body) || !('data' in body) || !Array.isArray(body.data)) {
       throw new Error('Unsupported model list');
     }
     ids = [...new Set(body.data.flatMap((model: unknown) =>
-      typeof model === 'object' && model !== null && 'id' in model && typeof model.id === 'string' && model.id.trim()
+      isObject(model) && 'id' in model && isString(model.id) && model.id.trim()
         ? [model.id.trim()] : []))].sort();
   } catch {
     console.log('Could not list models from this provider. Enter the model ID manually.');

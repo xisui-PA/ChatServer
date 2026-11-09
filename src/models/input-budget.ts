@@ -1,6 +1,7 @@
 import { IMAGE_TOKEN_RESERVE, MODEL_INPUT_TOKENS, TRUNCATION_MARKER_TOKENS } from '../limit';
 import { ResponseItem } from './responses-client';
 import { countTokens, limitTextTokens } from './tokens';
+import { isObject, isString } from '../type-guards';
 
 /** Truncates text without breaking Unicode and explicitly marks lost context. */
 export function boundedText(text: string, tokens: number): string {
@@ -11,8 +12,8 @@ export function boundedText(text: string, tokens: number): string {
 export function modelInputTokens(input: string | readonly ResponseItem[], instructions: string, tools: unknown = []): number {
   let images = 0;
   const json = JSON.stringify({ input, instructions, tools }, (key, value: unknown) => {
-    if (typeof value === 'object' && value !== null && 'type' in value &&
-      value.type === 'image_generation_call' && 'result' in value && typeof value.result === 'string') {
+    if (isObject(value) && 'type' in value &&
+      value.type === 'image_generation_call' && 'result' in value && isString(value.result)) {
       images += 1;
       return { ...value, result: '[generated image]' };
     }

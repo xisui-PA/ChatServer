@@ -43,7 +43,7 @@
     "duration": {
       "type": "integer",
       "minimum": 1,
-      "maximum": 2147483647
+      "maximum": 3600000
     },
     "chat": {
       "type": "object",
@@ -221,8 +221,16 @@
           "type": "string",
           "format": "uri",
           "pattern": "^https?://[^/?#@\\s]+(?:/[^?#\\s]*)?$",
-          "description": "agent-wechat HTTP(S) server root, without credentials, query, or fragment.",
+          "description": "agent-wechat HTTP(S) server root, entered without `/v1` (routes add the API prefix; a trailing `/v1` is stripped), and without credentials, query, or fragment.",
           "default": "http://127.0.0.1:6174"
+        },
+        "accountId": {
+          "description": "Daemon account ID from GET /v1/accounts (not a WeChat username). Omit to use the only authenticated account; multiple authenticated accounts are rejected as ambiguous.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/nonEmptyString"
+            }
+          ]
         },
         "tokenEnv": {
           "description": "Environment variable containing the bearer token; takes precedence over tokenFile.",
@@ -248,9 +256,9 @@
             "$ref": "#/definitions/nonEmptyString"
           }
         },
-        "pollIntervalMs": {
-          "description": "Delay after a completed poll, in milliseconds. Failed polls use exponential backoff.",
-          "default": 30000,
+        "reconnectIntervalMs": {
+          "description": "Base delay before reconnecting the WeChat event stream, in milliseconds. Consecutive failures double the delay up to a bounded cap.",
+          "default": 1000,
           "allOf": [
             {
               "$ref": "#/definitions/duration"
@@ -258,20 +266,13 @@
           ]
         },
         "timeoutMs": {
-          "description": "Timeout for each WeChat REST request in milliseconds; independent of model timeouts.",
+          "description": "Timeout for each WeChat REST request and for opening or waiting on the event stream, in milliseconds; independent of model timeouts.",
           "default": 30000,
           "allOf": [
             {
               "$ref": "#/definitions/duration"
             }
           ]
-        },
-        "bundleGapMs": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 2147483647,
-          "description": "Maximum timestamp gap between adjacent messages from the same sender, in milliseconds. Zero disables bundling.",
-          "default": 10000
         }
       }
     },

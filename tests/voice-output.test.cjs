@@ -16,7 +16,7 @@ const { FilterOutcome } = require('../src/filters/interface');
 const { WechatMessagerAdapter } = require('../src/messagers/wechat');
 const { ChatServer } = require('../src/server');
 const { registerMessager } = require('../src/messagers/registry');
-const { MAX_AUDIO_BYTES, MIN_VOICE_PADDING_MS, MAX_VOICE_PADDING_MS, WECHAT_VOICE_JOB_TIMEOUT_MS } = require('../src/limit');
+const { MAX_AUDIO_BYTES, MIN_VOICE_PADDING_MS, MAX_VOICE_PADDING_MS, WECHAT_SEND_TIMEOUT_MS } = require('../src/limit');
 
 function wav(bits = 16, encoding = 1) {
   const frameBytes = bits / 8;
@@ -38,15 +38,32 @@ function wav(bits = 16, encoding = 1) {
 }
 
 const message = { id: 'message:1', senderId: 'wxid_friend', channel: 'group@chatroom',
-  text: 'Please reply by voice.', timestamp: new Date().toISOString(), metadata: { wechatAccount: 'wxid_bot' } };
+  text: 'Please reply by voice.', timestamp: new Date().toISOString(),
+  metadata: { wechatAccount: 'wxid_bot', wechatUsername: 'wxid_bot' } };
 const response = voice => JSON.stringify({ reply: true, text: 'Here is the answer.', voice, memoryUpdates: { notes: [], forget: [] } });
-const job = (status, extra = {}) => ({ jobId: 'voice-job-1', chatId: message.channel, accountId: 'wxid_bot', status, ...extra });
+const job = (state, extra = {}) => ({ id: 'job-1', accountId: 'wxid_bot', kind: 'send',
+  threadId: message.channel, state, reason: null, ...extra });
+const intent = (state, extra = {}) => ({ id: 'send-1', accountId: 'wxid_bot', destination: message.channel,
+  state, errorCode: null, createdAt: new Date().toISOString(), ...extra });
+const upload = { id: 'source-1', mediaType: 'audio/wav', name: 'speech.wav', byteLength: 1000,
+  sha256: '0'.repeat(64), createdAt: new Date().toISOString() };
 
 function adapter() {
   const result = new WechatMessagerAdapter('agent-fixture-token');
   result.account = 'wxid_bot';
+  result.selfUsername = 'wxid_bot';
   result.handler = () => {};
   return result;
+}
+
+async function waitFor(predicate, label, timeout = 3000) {
+  const deadline = Date.now() + timeout;
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error(`timed out waiting for ${label}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 async function directory(t) {
@@ -262,80 +279,118 @@ test('TTS failure and superseded generation prevent upload and confirmed memory'
   }
 });
 
-test('WeChat voice upload uses multipart and idempotency, waiting for completion before resolving', async (t) => {
+test('WeChat voice upload stages bytes and completes on job.updated with one reconcile read', async (t) => {
   const transport = adapter();
   const audio = wav();
   const urls = [];
-  let polls = 0;
-  t.mock.method(timers, 'setTimeout', async () => {});
+  let reads = 0;
   t.mock.method(globalThis, 'fetch', async (url, options) => {
-    urls.push(url);
+    urls.push(String(url));
     assert.equal(options.headers.Authorization, 'Bearer agent-fixture-token');
-    if (options.method === 'POST') {
-      assert.match(options.headers['Idempotency-Key'], /^[0-9a-f-]{36}$/);
+    if (url.endsWith('/uploads')) {
+      assert.equal(options.headers['Idempotency-Key'], undefined);
       assert.equal(options.headers['Content-Type'], undefined);
-      assert.equal(options.body.get('chatId'), message.channel);
-      const file = options.body.get('audio');
+      const file = options.body.get('file');
+      assert.equal(file.name, 'speech.wav');
+      assert.equal(file.type, 'audio/wav');
       assert.deepEqual(Buffer.from(await file.arrayBuffer()), audio.data);
+      return new Response(JSON.stringify(upload), { status: 201 });
+    }
+    if (url.endsWith('/sends')) {
+      assert.match(options.headers['Idempotency-Key'], /^[0-9a-f-]{36}$/);
+      assert.deepEqual(JSON.parse(options.body),
+        { kind: 'voice', threadId: message.channel, sourceId: 'source-1' });
       return new Response(JSON.stringify(job('queued')), { status: 202 });
     }
-    polls++;
-    return new Response(JSON.stringify(job(polls === 1 ? 'recording' : 'completed')));
+    reads++;
+    assert.ok(url.endsWith('/jobs/job-1'));
+    return new Response(JSON.stringify(job('running')));
   });
-  await transport.reply(message, { text: 'Here is the answer.', voice: true, audio });
-  assert.equal(urls.filter(url => url.endsWith('/api/messages/voice')).length, 1);
-  assert.equal(polls, 2);
-  assert.ok(urls.every(url => !url.endsWith('/api/messages/send')));
+  const reply = transport.reply(message, { text: 'Here is the answer.', voice: true, audio });
+  await waitFor(() => reads === 1, 'one status reconciliation');
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(reads, 1, 'a queued job waits on its event instead of polling');
+  await transport.handleEvent({ cursor: '1', kind: 'job.updated', data: job('accepted') });
+  await reply;
+  assert.equal(urls.filter(url => url.endsWith('/uploads')).length, 1);
+  assert.equal(urls.filter(url => url.endsWith('/sends')).length, 1);
 });
 
-test('uncertain voice jobs are not resent or followed by a text fallback; the send queue recovers', async (t) => {
+test('uncertain media jobs are not read, cancelled, or followed by a text fallback', async (t) => {
   const transport = adapter();
   let uploads = 0;
-  let texts = 0;
-  t.mock.method(timers, 'setTimeout', async () => {});
+  let sends = 0;
+  let reads = 0;
   t.mock.method(globalThis, 'fetch', async (url) => {
-    if (url.endsWith('/api/messages/send')) { texts++; return new Response('{"success":true}'); }
-    if (url.endsWith('/api/messages/voice')) { uploads++; return new Response(JSON.stringify(job('needs_review'))); }
-    assert.fail('terminal job should not be polled or cancelled');
+    if (url.endsWith('/uploads')) {
+      uploads++;
+      return new Response(JSON.stringify(upload), { status: 201 });
+    }
+    if (url.endsWith('/sends')) {
+      sends++;
+      return sends === 1
+        ? new Response(JSON.stringify(job('needs_review', { reason: 'send_uncertain' })), { status: 202 })
+        : new Response(JSON.stringify(intent('accepted')));
+    }
+    reads++;
+    assert.fail('terminal job should not be read or cancelled');
   });
-  await assert.rejects(transport.reply(message, { text: 'Answer', voice: true, audio: wav() }), /needs_review/);
+  await assert.rejects(transport.reply(message, { text: 'Answer', voice: true, audio: wav() }),
+    /needs_review: send_uncertain/);
   assert.equal(uploads, 1);
-  assert.equal(texts, 0);
+  assert.equal(sends, 1);
+  assert.equal(reads, 0);
   await transport.reply(message, { text: 'A later text reply' });
-  assert.equal(texts, 1);
+  assert.equal(sends, 2);
 });
 
-test('cancellation stops polling and sends a separate best-effort voice-job cancellation', async (t) => {
+test('cancellation settles the pending job and requests job cancellation once', async (t) => {
   const transport = adapter();
   const controller = new AbortController();
   const urls = [];
-  t.mock.method(timers, 'setTimeout', async () => { controller.abort(); controller.signal.throwIfAborted(); });
   t.mock.method(globalThis, 'fetch', async (url, options) => {
-    urls.push(url);
-    if (url.endsWith('/cancel')) {
-      assert.equal(options.signal.aborted, false);
+    urls.push(String(url));
+    if (url.endsWith('/uploads')) {
+      return new Response(JSON.stringify(upload), { status: 201 });
+    }
+    if (url.endsWith('/sends')) {
+      return new Response(JSON.stringify(job('queued')), { status: 202 });
+    }
+    if (url.endsWith('/jobs/job-1/cancel')) {
       assert.equal(options.method, 'POST');
       return new Response(JSON.stringify(job('cancelled')));
     }
-    return new Response(JSON.stringify(job('queued')), { status: 202 });
+    assert.ok(urls.some((seen) => seen === url && url.endsWith('/jobs/job-1')), url);
+    return new Response(JSON.stringify(job('running')));
   });
-  await assert.rejects(transport.reply(message, { text: 'Answer', voice: true, audio: wav() }, controller.signal), /unconfirmed/);
-  assert.equal(urls.length, 2);
-  assert.ok(urls[1].endsWith('/voice-job-1/cancel'));
+  const reply = transport.reply(message, { text: 'Answer', voice: true, audio: wav() }, controller.signal);
+  await waitFor(() => urls.some((url) => url.endsWith('/jobs/job-1')), 'status reconciliation');
+  controller.abort();
+  await assert.rejects(reply, /unconfirmed/);
+  assert.equal(urls.filter(url => url.endsWith('/uploads')).length, 1);
+  assert.equal(urls.filter(url => url.endsWith('/sends')).length, 1, 'the job is never resubmitted');
+  assert.ok(urls.at(-1).endsWith('/jobs/job-1/cancel'));
 });
 
-test('voice job deadline cancels a pending job without resubmitting audio', async (t) => {
+test('send deadline cancels a running job without resubmitting audio', async (t) => {
   const originalTimeout = globalThis.setTimeout;
   t.mock.method(globalThis, 'setTimeout', (callback, ms, ...args) =>
-    originalTimeout(callback, ms === WECHAT_VOICE_JOB_TIMEOUT_MS ? 5 : ms, ...args));
+    originalTimeout(callback, ms === WECHAT_SEND_TIMEOUT_MS ? 5 : ms, ...args));
   const urls = [];
-  t.mock.method(globalThis, 'fetch', async url => {
-    urls.push(url);
-    return new Response(JSON.stringify(job(url.endsWith('/cancel') ? 'cancelled' : 'queued')));
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    urls.push(String(url));
+    if (url.endsWith('/uploads')) {
+      return new Response(JSON.stringify(upload), { status: 201 });
+    }
+    if (url.endsWith('/sends')) {
+      return new Response(JSON.stringify(job('queued')), { status: 202 });
+    }
+    return new Response(JSON.stringify(job(url.endsWith('/cancel') ? 'cancelled' : 'running')));
   });
+  // The shortened deadline settles the waiter and cancels the job once, without SSE.
   await assert.rejects(adapter().reply(message, { text: 'Answer', voice: true, audio: wav() }), /exceeded/);
-  assert.equal(urls.length, 2);
-  assert.ok(urls[1].endsWith('/cancel'));
+  assert.equal(urls.filter(url => url.endsWith('/uploads')).length, 1);
+  assert.ok(urls.at(-1).endsWith('/jobs/job-1/cancel'));
 });
 
 test('a cancelled synthesizer never returns padded speech for delivery', async () => {

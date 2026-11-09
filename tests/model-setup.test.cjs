@@ -82,7 +82,7 @@ test('guided add creates a provider with a hidden key and falls back to manual m
   await runAdd([]);
   const provider = f.writes[0].providers.at(-1);
   assert.equal(provider.baseUrl, 'http://new.local:1234/v1');
-  assert.equal(provider.timeoutMs, 180000);
+  assert.equal(provider.timeoutMs, 300000);
   assert.deepEqual(provider.models, [{ id: 'org/model', name: 'alias' }]);
   assert.deepEqual(f.sets, [['new-local', 'new-key']]);
   assert.equal(f.hidden.mock.callCount(), 1);

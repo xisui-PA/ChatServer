@@ -12,6 +12,7 @@ import { AudioFile, ImageFile } from '../messagers/interface';
 import { createTranscription, TranscriptionModel } from './transcriptions-client';
 import { createSpeech, SpeechModel } from './speech-client';
 import { generatedImages, ImageGenerationPolicy } from './image-generation';
+import { isObject, isRecord, isString } from '../type-guards';
 
 /** Per-request generation settings; never mutate a shared model's defaults. */
 export interface GenerationOptions {
@@ -143,7 +144,7 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
   ): Promise<ResponseResult & { images: readonly ImageFile[] }> {
     const runner = new ToolRunner(localTools);
     const initial: ResponseItem[] = [
-      ...(typeof input === 'string' ? [{ role: 'user', content: input }] : input),
+      ...(isString(input) ? [{ role: 'user', content: input }] : input),
       ...generated.output
     ];
     if (generated.images.length > 0) {
@@ -210,8 +211,8 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
         throw error;
       }
       const raw = result.raw;
-      if (typeof raw !== 'object' || raw === null || !('output' in raw) || !Array.isArray(raw.output) ||
-        !raw.output.every((item: unknown) => typeof item === 'object' && item !== null && !Array.isArray(item))) {
+      if (!isObject(raw) || !('output' in raw) || !Array.isArray(raw.output) ||
+        !raw.output.every((item: unknown) => isRecord(item))) {
         throw new Error('Tool-capable models must return a Responses API output array.');
       }
       const output = raw.output as ResponseItem[];
@@ -220,7 +221,7 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
       if (imageCalls.length > 0 && reservation === undefined) {
         throw new Error('Provider generated images without an available image generation quota.');
       }
-      if (reservation !== undefined && output.filter((item) => typeof item.type === 'string' &&
+      if (reservation !== undefined && output.filter((item) => isString(item.type) &&
         item.type.endsWith('_call') && item.type !== 'function_call').length > 1) {
         throw new Error('Provider exceeded the reserved image generation tool call budget.');
       }
@@ -240,7 +241,7 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
         throw new Error(`Provider tool output "${String(needsClient.type)}" requires unsupported client execution or approval.`);
       }
       // Hosted calls execute at the provider; retain their items but never run them locally.
-      usedApiCalls += output.filter((item) => typeof item.type === 'string' &&
+      usedApiCalls += output.filter((item) => isString(item.type) &&
         item.type.endsWith('_call') && item.type !== 'function_call').length;
       if (usedApiCalls > MAX_MODEL_TOOL_CALLS) {
         throw new Error('Model exceeded the provider-hosted tool call budget.');
@@ -258,8 +259,8 @@ class ProviderModel implements TextModel, TranscriptionModel, SpeechModel {
       const turn = [...output];
       const imageParts: Record<string, unknown>[] = [];
       for (const call of calls) {
-        if (typeof call.call_id !== 'string' || !call.call_id || typeof call.name !== 'string' ||
-          typeof call.arguments !== 'string' || callIds.has(call.call_id)) {
+        if (!isString(call.call_id) || !call.call_id || !isString(call.name) ||
+          !isString(call.arguments) || callIds.has(call.call_id)) {
           throw new Error('Model returned a malformed or duplicate function call.');
         }
         callIds.add(call.call_id);

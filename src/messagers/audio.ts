@@ -8,12 +8,22 @@ const formats: Record<string, string> = {
   m4a: 'audio/mp4', mp4: 'audio/mp4', webm: 'audio/webm'
 };
 
+/** Maps an upstream audio MIME type to the extension used for STT uploads. */
+export function audioExtension(mimeType: string): string {
+  const type = mimeType.split(';')[0].trim().toLowerCase();
+  const extension = Object.keys(formats).find((key) => formats[key] === type);
+  if (extension === undefined) {
+    throw new MediaUnavailableError(`Unsupported voice MIME type "${mimeType}"; agent-wechat must provide decoded WAV or another supported audio format.`);
+  }
+  return extension;
+}
+
 /** Decodes supported upstream audio without writing files or attempting local conversion. */
-export function audioFile(data: string, format: string, id: number): AudioFile {
+export function audioFile(data: string, format: string, id: string | number): AudioFile {
   const extension = format.toLowerCase();
   const mimeType = formats[extension];
   if (!Object.hasOwn(formats, extension)) {
-    throw new MediaUnavailableError(`Unsupported voice format "${format}"; agent-wechat must convert SILK to MP3.`);
+    throw new MediaUnavailableError(`Unsupported voice format "${format}"; agent-wechat must provide decoded WAV or another supported audio format.`);
   }
   if (!data || data.length > MAX_ENCODED_AUDIO_BYTES || data.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
     throw new MediaUnavailableError(`Voice data must be valid base64 no larger than ${MAX_AUDIO_BYTES / (1024 * 1024)} MiB.`);

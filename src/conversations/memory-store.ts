@@ -15,18 +15,14 @@ import path from 'node:path';
 import { ConversationMessage, OutgoingMessage } from '../messagers/interface';
 import { countTokens, limitTextTokens } from '../models/tokens';
 import { ConversationMemory, MemoryNote, MemoryNoteKind, MemoryUpdates, SentReply } from './interface';
+import { isBoolean, isRecord, isString } from '../type-guards';
 
 interface MemoryFile extends ConversationMemory {
   version: 1;
 }
 
-/** Checks disk data before it can become prompt context. */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function isTimestamp(value: unknown): value is string {
-  return typeof value === 'string' && Number.isFinite(Date.parse(value));
+  return isString(value) && Number.isFinite(Date.parse(value));
 }
 
 /** Keeps cache links bounded and supports memory files written before image generation. */
@@ -35,7 +31,7 @@ function imageIds(value: unknown): readonly string[] | undefined {
     return undefined;
   }
   if (!Array.isArray(value) || value.length > MAX_CACHED_IMAGES_PER_CONVERSATION ||
-    !value.every((id: unknown) => typeof id === 'string' && id.length > 0 && id.length <= MAX_MEMORY_ID_CHARS)) {
+    !value.every((id: unknown) => isString(id) && id.length > 0 && id.length <= MAX_MEMORY_ID_CHARS)) {
     throw new Error('Invalid stored reply image IDs.');
   }
   return [...new Set(value as string[])];
@@ -47,9 +43,9 @@ function parseFile(value: unknown): ConversationMemory {
     throw new Error('Expected a version 1 conversation memory file.');
   }
   const notes = value.notes.map((note: unknown): MemoryNote => {
-    if (!isRecord(note) || typeof note.id !== 'string' || note.id.length > MAX_MEMORY_ID_CHARS ||
-      typeof note.kind !== 'string' || !['summary', 'fact', 'question', 'inference'].includes(note.kind) ||
-      typeof note.text !== 'string' || !isTimestamp(note.sourceTimestamp)) {
+    if (!isRecord(note) || !isString(note.id) || note.id.length > MAX_MEMORY_ID_CHARS ||
+      !isString(note.kind) || !['summary', 'fact', 'question', 'inference'].includes(note.kind) ||
+      !isString(note.text) || !isTimestamp(note.sourceTimestamp)) {
       throw new Error('Invalid stored memory note.');
     }
     return {
@@ -61,10 +57,10 @@ function parseFile(value: unknown): ConversationMemory {
     };
   });
   const replies = value.replies.map((reply: unknown): SentReply => {
-    if (!isRecord(reply) || typeof reply.id !== 'string' || reply.id.length > MAX_MEMORY_ID_CHARS ||
-      typeof reply.text !== 'string' || !isTimestamp(reply.sentAt) ||
-      (reply.channel !== undefined && typeof reply.channel !== 'string') ||
-      (reply.direct !== undefined && typeof reply.direct !== 'boolean')) {
+    if (!isRecord(reply) || !isString(reply.id) || reply.id.length > MAX_MEMORY_ID_CHARS ||
+      !isString(reply.text) || !isTimestamp(reply.sentAt) ||
+      (reply.channel !== undefined && !isString(reply.channel)) ||
+      (reply.direct !== undefined && !isBoolean(reply.direct))) {
       throw new Error('Invalid stored sent reply.');
     }
     return {

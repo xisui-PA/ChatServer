@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { MessagerAdapter } from './interface';
 import { WechatMessagerAdapter } from './wechat';
+import { isNumber, isString } from '../type-guards';
 
 /**
  * Context passed to messager factories when a chat is created.
@@ -63,25 +64,25 @@ export function createMessager(
 
 registerMessager('wechat', (options, context) => {
   const label = `messager "wechat" (chat "${context.chatName}")`;
-  const known = ['baseUrl', 'tokenEnv', 'tokenFile', 'chatIds', 'pollIntervalMs', 'timeoutMs', 'bundleGapMs'];
+  const known = ['baseUrl', 'accountId', 'tokenEnv', 'tokenFile', 'chatIds', 'reconnectIntervalMs', 'timeoutMs'];
   for (const key of Object.keys(options)) {
     if (!known.includes(key)) {
       throw new Error(`${label}: unknown option "${key}".`);
     }
   }
-  for (const key of ['baseUrl', 'tokenEnv', 'tokenFile']) {
+  for (const key of ['baseUrl', 'accountId', 'tokenEnv', 'tokenFile']) {
     if (options[key] !== undefined &&
-      (typeof options[key] !== 'string' || options[key].trim() === '')) {
+      (!isString(options[key]) || options[key].trim() === '')) {
       throw new Error(`${label}: option "${key}" must be a non-empty string.`);
     }
   }
-  for (const key of ['pollIntervalMs', 'timeoutMs', 'bundleGapMs']) {
-    if (options[key] !== undefined && typeof options[key] !== 'number') {
+  for (const key of ['reconnectIntervalMs', 'timeoutMs']) {
+    if (options[key] !== undefined && !isNumber(options[key])) {
       throw new Error(`${label}: option "${key}" must be a number.`);
     }
   }
   if (options.chatIds !== undefined && (!Array.isArray(options.chatIds) ||
-    !options.chatIds.every((id) => typeof id === 'string' && id.trim() !== ''))) {
+    !options.chatIds.every((id) => isString(id) && id.trim() !== ''))) {
     throw new Error(`${label}: option "chatIds" must be an array of non-empty strings.`);
   }
   const tokenEnv = options.tokenEnv as string | undefined ?? 'AGENT_WECHAT_TOKEN';
@@ -94,12 +95,12 @@ registerMessager('wechat', (options, context) => {
   }
   return new WechatMessagerAdapter(token, {
     baseUrl: options.baseUrl as string | undefined,
+    accountId: options.accountId as string | undefined,
     chatIds: options.chatIds === undefined ? undefined : [...new Set([
       ...(options.chatIds as string[]),
       ...(context.mainAccount === undefined ? [] : [context.mainAccount])
     ])],
-    pollIntervalMs: options.pollIntervalMs as number | undefined,
-    timeoutMs: options.timeoutMs as number | undefined,
-    bundleGapMs: options.bundleGapMs as number | undefined
+    reconnectIntervalMs: options.reconnectIntervalMs as number | undefined,
+    timeoutMs: options.timeoutMs as number | undefined
   });
 });

@@ -1,6 +1,7 @@
 import { MAX_AUDIO_BYTES, MAX_TRANSCRIPT_CHARS } from '../limit';
 import { AudioFile } from '../messagers/interface';
 import { ResponsesApiError, resolveModelTimeoutMs } from './responses-client';
+import { isRecord, isString } from '../type-guards';
 
 /** A provider-bound speech-to-text model, independent of text-generation capabilities. */
 export interface TranscriptionModel {
@@ -52,8 +53,8 @@ export async function createTranscription(request: TranscriptionRequest): Promis
       }
       throw new ResponsesApiError('Transcription model returned invalid JSON.', response.status);
     }
-    if (typeof result !== 'object' || result === null || Array.isArray(result) ||
-      !('text' in result) || typeof result.text !== 'string' || result.text.length > MAX_TRANSCRIPT_CHARS) {
+    if (!isRecord(result) ||
+      !('text' in result) || !isString(result.text) || result.text.length > MAX_TRANSCRIPT_CHARS) {
       throw new ResponsesApiError(`Transcription model must return a text string of at most ${MAX_TRANSCRIPT_CHARS} characters.`, response.status);
     }
     return result.text.trim();

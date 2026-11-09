@@ -6,6 +6,7 @@ import { loadTestModel, parseCommandOptions } from './command-support';
 import { createSpeech } from './speech-client';
 import { padVoiceAudio } from './voice-synthesizer';
 import { withModelRetries } from './retry';
+import { isRecord } from '../type-guards';
 
 const DEFAULT_SPEECH_TEST_TEXT = 'Hello! This is a speech synthesis test.';
 
@@ -43,7 +44,7 @@ function speechOptions(encoded?: string): Record<string, unknown> {
       throw new CliError('--options must contain a valid JSON object.');
     }
   }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isRecord(value)) {
     throw new CliError('--options must contain a JSON object.');
   }
   for (const key of ['model', 'input', 'response_format', 'stream_format']) {

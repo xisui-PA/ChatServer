@@ -1,12 +1,13 @@
 import { ConversationMessage, IncomingMessage } from '../messagers/interface';
 import { SenderIdSource } from './ignore-file';
 import { FilterAdapter, FilterOutcome } from './interface';
+import { isFunction } from '../type-guards';
 
 /**
  * Distinguishes a dynamic source from a fixed list of sender IDs.
  */
 function isSenderIdSource(value: readonly string[] | SenderIdSource): value is SenderIdSource {
-  return typeof (value as SenderIdSource).getSenderIds === 'function';
+  return isFunction((value as SenderIdSource).getSenderIds);
 }
 
 /**
