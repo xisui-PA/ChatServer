@@ -2,14 +2,17 @@
 
 A TypeScript bridge between chat apps and LLM models. It filters incoming messages,
 generates short replies, and retains compact conversation memory. The built-in
-WeChat adapter connects to agent-wechat using outbound REST requests; ChatServer
-opens no listening ports.
+WeChat adapter connects to agent-wechat using outbound REST requests and its
+v2.1 server-sent event stream; ChatServer opens no listening ports.
 
 ## Quick start: WeChat
 
-Requires Node.js **22.22.2+ (22.x) or 24.15.0+**, a Responses API compatible model
-provider, and a running, logged-in [agent-wechat server](https://thisnick.github.io/agent-wechat/reference/api/)
-with its bearer token. WeChat login and agent-wechat setup are managed separately.
+Requires Node.js **24.15+**, a Responses API compatible model
+provider, and a running, logged-in [agent-wechat server](https://github.com/thisnick/agent-wechat/tree/v2.1.0)
+**v2.1.0 or newer** with a bearer token that grants the `read`, `send`, and `media`
+scopes for its account. Incoming messages arrive over the daemon's authenticated
+`/v1/accounts/{account}/events/stream` SSE endpoint; REST is used for sends, media,
+and name lookups. WeChat login and agent-wechat setup are managed separately.
 
 1. Install and build from the repository root:
 
@@ -43,6 +46,7 @@ with its bearer token. WeChat login and agent-wechat setup are managed separatel
            "apiTools": [],
            "options": {
              "baseUrl": "http://127.0.0.1:6174",
+             "accountId": "your-account-id",
              "chatIds": ["wxid_example"]
            }
          },
@@ -52,9 +56,14 @@ with its bearer token. WeChat login and agent-wechat setup are managed separatel
    }
    ```
 
-   Replace `replier` with the printed reference and `wxid_example` with a direct
-   chat or group ID from agent-wechat's `/api/chats`. Set `baseUrl` to your
-   agent-wechat server root, without `/api`. `localTools: []` disables local
+   Replace `replier` with the printed reference and `wxid_example` with a thread ID
+   from `GET /v1/accounts/<account-id>/threads`: a contact username such as
+   `wxid_example`, or a group ID ending in `@chatroom`. Set `baseUrl` to your
+   agent-wechat server root; the adapter appends `/v1` itself, and a base URL that
+   already ends in `/v1` is accepted. `GET /v1/accounts` lists the daemon account
+   IDs with their `ownUsername` and `authenticated` flags; paste an ID into
+   `accountId`, or omit it when exactly one authenticated account is visible to the
+   token (more than one is rejected as ambiguous). `localTools: []` disables local
    functions; omit it to enable the built-ins. `apiTools` defaults to `[]`.
 
 4. Set the **agent-wechat bearer token** and start ChatServer.
@@ -78,7 +87,10 @@ with its bearer token. WeChat login and agent-wechat setup are managed separatel
    before the first reply. With no filters, the reply model decides whether to
    respond. Stop with Ctrl+C.
 
-The WeChat bearer token and the model provider's API key are separate credentials.
+Create the agent-wechat token with the `read`, `send`, and `media` scopes for the
+configured accounts; sending text needs `send`, lazy images and voice need `media`,
+and the event stream needs `read`. The WeChat bearer token and the model provider's API key
+are separate credentials.
 For LAN model servers on Windows, use the full hostname such as `llm-host.local`
 rather than a bare hostname.
 
@@ -230,9 +242,15 @@ call occurred. Ambiguous provider failures retain their reservation; failed
 delivery or rejected image bytes do not refund generation charges. Once an image
 is generated, further local-tool rounds and model retries cannot generate another
 for that reply. When quota is exhausted, image generation is removed from the
-request and text replies remain available. WeChat image delivery uses the existing
-[`/api/messages/send` image payload](https://github.com/thisnick/agent-wechat/blob/5472a168956ad5d09d3063342e691448980a5c31/packages/agent-server-rust/src/router/messages.rs#L144)
-and is never automatically retried after an uncertain send.
+request and text replies remain available. WeChat image delivery stages the PNG with
+`POST /v1/accounts/{account}/uploads`, then sends
+`{ "kind": "image", "threadId": ..., "sourceId": ... }` to `POST /sends` with a
+fresh `Idempotency-Key`, following the
+[v2 media contract](https://github.com/thisnick/agent-wechat/blob/0f4ad16e4a245e3f8a57c0b8b800d304cb425c85/docs/src/content/docs/use/media.mdx).
+The v2 API has no combined image/text send, so a caption is delivered as its own
+text message after the images. Delivery is confirmed by the media job's `job.updated`
+event over the adapter's existing event stream; an uncertain send is never
+automatically retried.
 
 Provider URL citations are preserved as complete source links in outgoing text,
 including after a formatting repair. Text is shortened to reserve room for links;
@@ -271,9 +289,11 @@ Friend wxid_alice: Alice is learning photography and prefers brief, practical ti
 Channel 123456@chatroom: A photography club discussing weekend outings.
 ```
 
-Model inputs include the WeChat display name when available, and replies prefer
-that name when referring to a person. Stable wxids still identify speakers and
-control `mainAccount`, ignore rules, and delivery. Names may change or be shared;
+Model inputs include a sender's WeChat display name when available, preferring a
+group member's chatroom nickname, then the friend remark or contact name, then the
+WeChat-wide nickname. Replies prefer that name when referring to a person. Stable
+wxids still identify speakers and control `mainAccount`, ignore rules, and
+delivery; names are never used for those checks. Names may change or be shared;
 use wxids in background entries to keep them unambiguous.
 
 The background is included in model filter and replier inputs. It is shared by
@@ -288,17 +308,18 @@ conversation memory.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `baseUrl` | `http://127.0.0.1:6174` | Agent-wechat root URL, without `/api` |
+| `baseUrl` | `http://127.0.0.1:6174` | agent-wechat server root; a trailing `/v1` is also accepted |
+| `accountId` | single authenticated account | Daemon account ID from `GET /v1/accounts` (not a WeChat username); omit only when exactly one authenticated account is visible |
 | `tokenEnv` | `AGENT_WECHAT_TOKEN` | Environment variable containing the bearer token |
 | `tokenFile` | unset | Token file used when the environment token is absent; relative to the config directory |
 | `chatIds` | all chats | Exact conversation IDs to monitor; `[]` monitors none except `mainAccount`, if configured |
-| `pollIntervalMs` | `30000` | Delay after each completed poll |
-| `timeoutMs` | `30000` | Per-request API timeout |
-| `bundleGapMs` | `20000` | Maximum gap between adjacent same-sender messages in a bundle; `0` disables bundling |
+| `reconnectIntervalMs` | `1000` | Base delay before reconnecting the event stream; consecutive failures back off exponentially up to a bounded cap |
+| `timeoutMs` | `30000` | Per-request API timeout, and the deadline for opening the event stream or waiting on its next chunk or heartbeat |
 
-Tokens are read at startup. Group IDs typically end in `@chatroom`.
+Tokens are read at startup and need the `read`, `send`, and `media` scopes for the
+selected account. Group IDs typically end in `@chatroom`.
 `mainAccount`, when set, is monitored even if omitted from `chatIds`. Its exact
-`/status` command returns local queue, delivery, error, and polling information
+`/status` command returns local queue, delivery, event-stream, and error information
 without calling a model; it uses the normal reply delay. Other senders and group
 status requests are ignored.
 
@@ -332,7 +353,7 @@ to inspect cached images, but receive no other local or hosted tools.
 
 Provider URLs, model IDs/aliases, and provider-specific `timeoutMs` live in
 `models.json`. Each provider requires an explicit `baseUrl`; requests default to a
-**3-minute** timeout. API keys are stored separately under the provider name:
+**5-minute** timeout. API keys are stored separately under the provider name:
 macOS Keychain, Linux Secret Service (`secret-tool`), or Windows Credential Manager
 (requires the `CredentialManager` PowerShell module).
 
@@ -446,12 +467,21 @@ exclusions, before model filters and the replier. Transcripts retain the origina
 sender, timestamp, and message ID and are reused across retained snapshots. Raw
 audio is not saved in conversation memory. Configure `tts` separately for voice replies.
 
-Agent-wechat normally [converts received voice to MP3](https://github.com/thisnick/agent-wechat/blob/main/packages/agent-server-rust/src/tools/wechat_media.rs).
-Audio is limited to 20 MiB per message. Pending media gets bounded retries;
-unsupported audio (including raw SILK when upstream conversion fails), unavailable
-media, and recordings with no recognized speech are skipped with a log. STT
-request failures stop the turn rather than generating a reply from missing audio.
-Without `stt`, voice messages are ignored without downloads or model requests.
+Voice media stays lazy: receiving events never downloads audio. When a turn needs the
+recording, ChatServer lists `GET /v1/accounts/{account}/messages/{id}/media`, picks
+the best copy, and asks for it with
+`POST /messages/{id}/media-transfers` (`{ "messageId": ..., "assetId": ... }`). While
+the download job runs the asset reports `pending`, and the existing bounded retries
+defer the turn. Once an asset is `available`, its bytes are streamed from
+`GET /v1/accounts/{account}/media/{assetId}/content`; the account-scoped route is
+built locally rather than taken from the response. See the
+[v2 incoming media contract](https://github.com/thisnick/agent-wechat/blob/0f4ad16e4a245e3f8a57c0b8b800d304cb425c85/docs/src/content/docs/use/quality.mdx).
+The daemon's decoded voice copy is WAV, so STT models receive it directly; raw
+`audio/silk` is rejected. Audio is limited to 20 MiB per message. Unavailable or
+unsupported media and recordings with no recognized speech are skipped with a log.
+STT request failures stop the turn rather than generating a reply from missing
+audio. Without `stt`, voice messages are ignored without downloads or model
+requests.
 
 ### Voice replies (TTS)
 
@@ -478,12 +508,16 @@ The same short-reply limits apply to the spoken text. ChatServer adds independen
 random **0.5–2 second** silences before and after the audio, without requiring
 FFmpeg on the ChatServer machine.
 
-Voice replies use the normal serial queue and 1–3 minute pacing. The adapter uploads
-audio to agent-wechat's voice-job API and waits for confirmed completion, up to
-three minutes; this requires an agent-wechat version with voice-job support.
-Failure or uncertain delivery is logged without resending or sending an extra
-text reply. Pending jobs receive best-effort cancellation on failure or shutdown.
-Memory records the spoken text only after confirmed delivery; audio is not saved.
+Voice replies use the normal serial queue and 1–3 minute pacing. The adapter stages
+the padded WAV with `POST /uploads`, sends
+`{ "kind": "voice", "threadId": ..., "sourceId": ... }` to `POST /sends` with a
+fresh `Idempotency-Key`, and waits up to three minutes for the matching
+`job.updated` event on the adapter's event stream; this requires agent-wechat
+v2.1.0 or newer. Failure or uncertain delivery is logged without resending or
+sending an extra text reply.
+Unfinished jobs receive a best-effort `POST /jobs/{id}/cancel` on failure or
+shutdown. Memory records the spoken text only after confirmed delivery; audio is
+not saved.
 Omitting `tts` keeps replies in text. Restart after configuration changes.
 
 ## Runtime behavior
@@ -492,9 +526,55 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
   successful reply or replier decision to stay silent, capped at the latest 30 source
   messages. Filter denials retain messages for later turns. New arrivals update
   pending context. Processing and sending are sequential, paced at 1–3 minutes.
-- **History:** Messages from before startup, including those received while stopped,
-  are skipped. Self messages provide context without triggering replies; manual
-  replies arriving during generation invalidate the pending answer.
+- **Event stream:** `start` performs one
+  `GET /v1/accounts/{account}/threads?limit=1` lookup and keeps only its
+  `asOfEventCursor`; the returned threads are not paged and no message history is
+  fetched. It then opens
+  `GET /v1/accounts/{account}/events/stream?after=<cursor>` with a `read`-scoped
+  bearer token. Event kinds are inside the JSON payload (`message.committed`,
+  `account.updated`, `send.updated`, `job.updated`, ...);
+  `message.committed` supplies `data.messageId` and `data.threadId`, and the full
+  message is read with `GET /v1/accounts/{account}/messages/{id}`. Each decimal cursor
+  is kept as a string (it may exceed JavaScript's safe integer range) and
+  checkpointed after the message is read and dispatched, or after an intentional
+  filter/skip decision. The daemon needs no consumer acknowledgement. Processing is
+  sequential; a failed message read does not advance the checkpoint, so reconnecting
+  replays that event. A committed event whose message row the daemon has already
+  deleted (`GET` answers 404 or 410) is logged as an intentional skip and remembered
+  by message ID, so the checkpoint advances and later events in the same stream are
+  still handled; transient or authorization failures stay replayable. Heartbeat
+  comments every 15 seconds keep the idle deadline open. Frames use the default SSE
+  message event as the daemon sends them, with the kind inside the JSON payload:
+  unknown payload kinds need no read and are checkpointed after safe handling. A named
+  SSE event other than `message` is ignored without being checkpointed, except
+  `event: error`, which is decoded for `event_cursor_expired` and otherwise fails the
+  stream for a reconnect.
+- **Live messages:** Only events after startup are delivered, and only that exact
+  message route is read — never a message listing. A `message.committed` event is
+  handed off as its own turn; the server queue then aggregates each conversation's
+  buffered messages into one snapshot per turn, so a burst still arrives as bounded
+  context even though every event was delivered individually. The cutoff is the
+  message's saved `createdAt`: a message whose source time precedes startup, or that
+  the daemon reports without a time, is skipped and remembered so a replay never
+  delivers it. Equal source times are never merged or dropped. Self messages provide
+  context without triggering replies; manual replies arriving during generation
+  invalidate the pending answer. A replayed cursor at or below the checkpoint is
+  compared as an integer string (never as a float) and skipped, so the checkpoint never
+  regresses. Recently handled message IDs are kept in a bounded in-memory cache — the
+  cursor checkpoint is the primary de-duplication — and the cache is cleared on stop,
+  reset, or an identity switch.
+  The daemon account ID and the signed-in `ownUsername` are captured around every
+  awaited event and status read; an identity change stops that reader and
+  tail-bootstraps the new login instead of checkpointing or delivering the previous
+  login's events, and it settles that login's pending sends.
+  If the daemon reports `event_cursor_expired` (HTTP before headers or an in-stream
+  `event:error`), the adapter performs one more `threads?limit=1` lookup, rebases the
+  checkpoint on that current tail and deliberately skips the missed window rather than
+  backfilling history; it never resets to cursor zero. The capped reconnect backoff
+  still applies, so repeated expiry against an unchanged tail cannot spin. A reconnect
+  that is not an expiry resumes from the last processed cursor, so events the daemon
+  still retains replay and are de-duplicated. Startup and expiry bootstrap the stream;
+  ChatServer never pages `/threads/{thread}/messages` for history and never backfills.
 - **Media:** Text, images, and optional STT voice input are supported; video,
   stickers, and files are skipped. The latest four new images per snapshot, each at most 5 MiB, are attached directly.
   Models receiving them must support image input. Pending media gets bounded
@@ -530,8 +610,31 @@ Omitting `tts` keeps replies in text. Restart after configuration changes.
   Page reading supports public HTTP(S) text/HTML/JSON, not PDFs or authenticated
   pages. Set `messager.localTools` to select a subset or disable local tools.
   `messager.apiTools` separately enables provider-hosted tools; its default is empty.
-- **Failures:** Transient model errors retry the full generation up to three times,
-  ten seconds apart. Polling backs off on API errors. Failed sends are never
+- **Identity:** The daemon account ID and the signed-in WeChat username are tracked
+  separately. Every reply and lazy media load is fenced to both values captured when
+  it originated, re-checked after each request, so a re-login on the same daemon
+  profile cannot deliver someone else's queued reply or fetch their attachments.
+  Conversation queues, memory files, and image caches are scoped by that same pair, so
+  a cache written under an account-only identity is never adopted by a named login;
+  this is a security fix with no migration of existing account-only caches.
+- **Reconnect and status:** A closed, idle, or failed event stream reconnects with
+  capped exponential backoff starting at `reconnectIntervalMs`. Heartbeat comments and
+  received chunks reset the idle deadline; the backoff resets only after an event is
+  handled, so a stream that connects but keeps failing to read a message backs off
+  further. Every retry after the first re-reads the account and revalidates both the
+  daemon account ID and `ownUsername`; a switch or re-login clears cursors, resets
+  the startup cutoff, and re-bootstraps the stream from the new login's current tail.
+  `/status` reports the last dispatched event, last stream activity, consecutive
+  stream failures, and the last stream error. Transient model errors retry the full
+  generation up to three times, ten seconds apart.
+  Outbound confirmation arrives over the same event stream: a nonterminal
+  `POST /sends` is settled by the matching `send.updated` (text) or `job.updated`
+  (media) payload, with one `GET /sends/{id}` or `GET /jobs/{id}` read after
+  registration and after each reconnect to reconcile a submission response or a
+  confirmation that arrived while detached. There is no interval polling. A
+  submission response that is already terminal is accepted or rejected immediately.
+  IDs are opaque strings under `/v1/accounts/{account}/...`, text and media
+  confirmations can never settle each other, and failed or uncertain sends are never
   automatically retried because delivery may already have succeeded remotely.
 
 Avoid overlapping pipelines for the same conversations, which can produce duplicate

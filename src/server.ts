@@ -27,6 +27,7 @@ import { VoiceTranscriber } from './models/voice-transcriber';
 import { MessagerContextFile } from './messagers/context-file';
 import { VoiceSynthesizer } from './models/voice-synthesizer';
 import { ImageGenerationPolicy } from './models/image-generation';
+import { isString } from './type-guards';
 
 export * from './filters/interface';
 export * from './filters/ignore-file';
@@ -76,6 +77,36 @@ interface ConversationState {
 
 /** A manual/self reply arrived after the snapshot was taken. */
 class SupersededTurnError extends Error {}
+
+/** Signed-in WeChat identity carried by native adapter metadata. */
+interface WechatIdentity {
+  /** Daemon account profile ID; one profile can be signed in as different users. */
+  account: string | null;
+  /** Signed-in username, or null for legacy data recorded before it existed. */
+  username: string | null;
+}
+
+/** Keeps one opaque identity field verbatim; absent, blank, and non-string values mean none. */
+function identityField(value: unknown): string | null {
+  // The adapter compares both identity fields by exact string equality; trimming or case
+  // folding here could merge two distinct accounts into one scheduling and storage scope.
+  const exact = isString(value) ? value : '';
+  return exact === '' ? null : exact;
+}
+
+/**
+ * Reads the signed-in identity that scopes one message's scheduling and stored context.
+ *
+ * A daemon account is a profile, not a user: the same account ID can sign in as a new
+ * username, so context must be scoped by both fields, used exactly as reported. Messages
+ * from transports without WeChat identity return undefined and keep their transport-neutral
+ * keys, while a message without a username never shares a namespace with a named login.
+ */
+function wechatIdentity(message: IncomingMessage): WechatIdentity | undefined {
+  const account = identityField(message.metadata?.wechatAccount);
+  const username = identityField(message.metadata?.wechatUsername);
+  return account === null && username === null ? undefined : { account, username };
+}
 
 /** Owns chat pipelines, message handling, and adapter startup/shutdown. */
 export class ChatServer {
@@ -303,18 +334,18 @@ export class ChatServer {
     if (statusRequest === undefined && regularMessages.length === 0) {
       return;
     }
-    const key = JSON.stringify([
-      chat.name,
-      message.metadata?.wechatAccount ?? null,
-      message.channel ?? message.senderId
-    ]);
+    const identity = wechatIdentity(message);
+    const thread = message.channel ?? message.senderId;
+    // The signed-in username scopes scheduling, so a re-login never inherits old context.
+    const key = JSON.stringify(identity === undefined
+      ? [chat.name, null, thread]
+      : [chat.name, identity.account, identity.username, thread]);
     let conversation = this.conversations.get(key);
     if (conversation === undefined) {
-      const memoryKey = JSON.stringify([
-        chat.messager.name,
-        message.metadata?.wechatAccount ?? chat.name,
-        message.channel ?? message.senderId
-      ]);
+      // Stored memory and images use the same scope, so a re-login never loads them.
+      const memoryKey = JSON.stringify(identity === undefined
+        ? [chat.messager.name, chat.name, thread]
+        : [chat.messager.name, identity.account, identity.username, thread]);
       conversation = {
         chat, memoryKey, latest: message, messages: [], revision: 0,
         processing: false, hasPendingMessages: false, selfRevision: 0, retryAttempts: 0
@@ -643,8 +674,8 @@ export class ChatServer {
       `Processing errors: ${this.processingFailures} (filters ${this.filterFailures})`,
       `Last processing error: ${this.lastProcessingError ?? 'none'} (${age(this.lastProcessingErrorAt)})`,
       `Deliveries: ${this.deliveries}; failures ${this.deliveryFailures}; last ${age(this.lastDeliveryAt)}`,
-      `Adapter: ${chat.messager.name}${health === undefined ? '' : health.active ? ' active' : ' stopped'}; poll failures ${health?.consecutivePollFailures ?? 0}; failed chats ${health?.failedChats ?? 0}`,
-      `Last poll: ${age(health?.lastSuccessfulPollAt)}; last poll error: ${age(health?.lastPollErrorAt)}`,
+      `Adapter: ${chat.messager.name}${health === undefined ? '' : health.active ? ' active' : ' stopped'}; stream failures ${health?.consecutiveFailures ?? 0}`,
+      `Last event: ${age(health?.lastEventAt)}; stream activity: ${age(health?.lastStreamActivityAt)}; last error: ${health?.lastError ?? 'none'} (${age(health?.lastErrorAt)})`,
       `Delay: ${MIN_REPLY_DELAY_MS / 60_000}–${MAX_REPLY_DELAY_MS / 60_000}m; memory: ${MEMORY_RETENTION_MS / (24 * 60 * 60 * 1000)} days/${chat.memoryTokenLimit} tokens`
     ].join('\n');
     await this.deliverReply(chat, message, { text: limitReplyText(text), direct: true });

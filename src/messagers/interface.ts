@@ -107,18 +107,22 @@ export type MessageHandler = (message: IncomingMessage) => void;
 /** Locally observed adapter health; reading it must not make network requests. */
 export interface MessagerStatus {
   active: boolean;
-  lastSuccessfulPollAt?: string;
-  consecutivePollFailures?: number;
-  failedChats?: number;
-  lastPollError?: string;
-  lastPollErrorAt?: string;
+  /** When one incoming message event was successfully read and dispatched. */
+  lastEventAt?: string;
+  /** When the transport last connected a receive stream. */
+  lastStreamConnectedAt?: string;
+  /** Last chunk or heartbeat comment received on the stream. */
+  lastStreamActivityAt?: string;
+  consecutiveFailures?: number;
+  lastError?: string;
+  lastErrorAt?: string;
 }
 
 /**
  * Transport abstraction: receives messages from some source and sends replies back.
  *
  * Implementations are responsible for their own transport (WebSocket, stdin/stdout,
- * HTTP polling, a message queue, ...). The server only depends on this interface.
+ * event streams, a message queue, ...). The server only depends on this interface.
  */
 export interface MessagerAdapter {
   /** Human-readable adapter name, used in logs. */

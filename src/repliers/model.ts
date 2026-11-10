@@ -20,6 +20,7 @@ import { createConversationInput } from '../models/conversation-input';
 import { ResponseCitation } from '../models/responses-client';
 import { ReadImageTool } from '../tools/read-image';
 import { ImageGenerationPolicy } from '../models/image-generation';
+import { isBoolean, isRecord, isString } from '../type-guards';
 
 /** Shared output contract for generation and formatting-only repair. */
 const REPLY_FORMAT_INSTRUCTIONS = [
@@ -160,13 +161,13 @@ export class ModelReplier implements Replier {
     } catch {
       throw new Error('Reply model returned invalid JSON.');
     }
-    if (typeof result !== 'object' || result === null || Array.isArray(result) ||
-      !('reply' in result) || typeof result.reply !== 'boolean' ||
-      !('text' in result) || typeof result.text !== 'string') {
+    if (!isRecord(result) ||
+      !('reply' in result) || !isBoolean(result.reply) ||
+      !('text' in result) || !isString(result.text)) {
       throw new Error('Reply model must return reply and text.');
     }
     const memoryUpdates = parseMemoryUpdates('memoryUpdates' in result ? result.memoryUpdates : undefined);
-    if ('voice' in result && typeof result.voice !== 'boolean') {
+    if ('voice' in result && !isBoolean(result.voice)) {
       throw new Error('Reply model voice must be a boolean.');
     }
     if (!result.reply) {

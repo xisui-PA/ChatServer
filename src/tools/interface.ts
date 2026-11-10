@@ -1,4 +1,5 @@
 import type { CachedImage } from '../conversations/image-store';
+import { isRecord, isString } from '../type-guards';
 
 /** Native image attachments are kept separate from JSON tool output. */
 export class ToolImageResult {
@@ -34,7 +35,7 @@ export interface Tool {
 
 /** Validates an argument object before a tool accesses any fields. */
 export function toolArguments(args: unknown, keys: readonly string[]): Record<string, unknown> {
-  if (typeof args !== 'object' || args === null || Array.isArray(args)) {
+  if (!isRecord(args)) {
     throw new Error('Tool arguments must be a JSON object.');
   }
   const record = args as Record<string, unknown>;
@@ -47,7 +48,7 @@ export function toolArguments(args: unknown, keys: readonly string[]): Record<st
 /** Reads a bounded, nonempty string argument. */
 export function stringArgument(args: Record<string, unknown>, name: string, maxLength: number): string {
   const value = args[name];
-  if (typeof value !== 'string' || !value.trim() || value.length > maxLength) {
+  if (!isString(value) || !value.trim() || value.length > maxLength) {
     throw new Error(`${name} must be a nonempty string of at most ${maxLength} characters.`);
   }
   return value.trim();

@@ -56,9 +56,9 @@
         "timeoutMs": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 2147483647,
+          "maximum": 3600000,
           "description": "Timeout in milliseconds for this provider's model requests. For repliers with tools, also caps the complete model/tool cycle.",
-          "default": 180000
+          "default": 300000
         },
         "models": {
           "type": "array",

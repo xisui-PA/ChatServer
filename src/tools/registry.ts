@@ -4,6 +4,7 @@ import { LocalToolSpec, Tool } from './interface';
 import { ReadUrlTool } from './read-url';
 import { WebSearchTool } from './web-search';
 import { ReadImageTool } from './read-image';
+import { isRecord, isString } from '../type-guards';
 
 export const DEFAULT_TOOL_NAMES: readonly string[] = ['web_search', 'read_url', 'calculate', 'current_time', 'read_image'];
 
@@ -35,13 +36,13 @@ export function parseLocalTools(value: unknown): string[] {
   }
   const names = value.map((entry: unknown, index) => {
     let name: unknown = entry;
-    if (typeof entry === 'object' && entry !== null && !Array.isArray(entry)) {
+    if (isRecord(entry)) {
       if (Object.keys(entry).some((key) => key !== 'type')) {
         throw new Error(`localTools[${index}] supports only the type field.`);
       }
       name = 'type' in entry ? entry.type : undefined;
     }
-    if (typeof name !== 'string' || !hasTool(name)) {
+    if (!isString(name) || !hasTool(name)) {
       throw new Error(`localTools[${index}] must name a registered tool. Available: ${listTools().join(', ')}.`);
     }
     return name;

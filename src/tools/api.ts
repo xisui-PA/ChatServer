@@ -1,4 +1,5 @@
 import { ApiToolDefinition } from './interface';
+import { isRecord, isString } from '../type-guards';
 
 /** Validates the shared shape; the selected provider validates tool-specific options. */
 export function parseApiTools(value: unknown): ApiToolDefinition[] {
@@ -6,9 +7,9 @@ export function parseApiTools(value: unknown): ApiToolDefinition[] {
     throw new Error('apiTools must be an array of tool type strings or provider-hosted tool objects.');
   }
   return value.map((entry: unknown, index) => {
-    const tool = typeof entry === 'string' ? { type: entry } : entry;
-    if (typeof tool !== 'object' || tool === null || Array.isArray(tool) ||
-      !('type' in tool) || typeof tool.type !== 'string' || !/^\S+$/.test(tool.type)) {
+    const tool = isString(entry) ? { type: entry } : entry;
+    if (!isRecord(tool) ||
+      !('type' in tool) || !isString(tool.type) || !/^\S+$/.test(tool.type)) {
       throw new Error(`apiTools[${index}] must be a nonempty tool type string or an object with a type, without whitespace in the type.`);
     }
     if (tool.type === 'function' || tool.type === 'custom') {

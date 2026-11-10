@@ -4,6 +4,7 @@ import { IgnoreSenderFilter } from './ignore-sender';
 import { FilterAdapter } from './interface';
 import { ModelFilter } from './model';
 import { TextModel } from '../models/runtime';
+import { isString } from '../type-guards';
 
 /**
  * Context passed to filter factories when a chat is created.
@@ -83,7 +84,7 @@ function stringArrayOption(
   if (value === undefined) {
     return undefined;
   }
-  if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+  if (!Array.isArray(value) || !value.every((item) => isString(item))) {
     throw new Error(`${label}: option "${key}" must be an array of strings.`);
   }
   return value;
@@ -101,7 +102,7 @@ function stringOption(
   if (value === undefined) {
     return undefined;
   }
-  if (typeof value !== 'string') {
+  if (!isString(value)) {
     throw new Error(`${label}: option "${key}" must be a string.`);
   }
   return value;

@@ -8,6 +8,7 @@ import {
 import { ConversationMessage, ImageFile as GeneratedImageFile, IncomingImage } from '../messagers/interface';
 import { imageDataUrl } from '../messagers/images';
 import { boundedText } from '../models/input-budget';
+import { isRecord, isString } from '../type-guards';
 
 /** Small source labels can be included in prompts without including image bytes. */
 export interface CachedImageReference {
@@ -179,17 +180,17 @@ export class ConversationImageStore {
         throw new Error('Image cache file exceeds the size limit.');
       }
       const value = JSON.parse(await fs.readFile(filePath, 'utf8')) as ImageFile;
-      if (value?.version !== 1 || !value.images || typeof value.images !== 'object' || Array.isArray(value.images)) {
+      if (value?.version !== 1 || !isRecord(value.images)) {
         throw new Error('Expected a version 1 image cache file.');
       }
       const images: Record<string, CachedImage> = Object.create(null);
       const now = Date.now();
       for (const [id, image] of Object.entries(value.images)) {
         if (!image || image.id !== id || !id || id.length > MAX_MEMORY_ID_CHARS ||
-          typeof image.messageId !== 'string' || !image.messageId || image.messageId.length > MAX_MEMORY_ID_CHARS ||
-          typeof image.senderId !== 'string' || typeof image.timestamp !== 'string' ||
-          !Number.isFinite(Date.parse(image.timestamp)) || typeof image.dataUrl !== 'string' ||
-          (image.senderName !== undefined && typeof image.senderName !== 'string') ||
+          !isString(image.messageId) || !image.messageId || image.messageId.length > MAX_MEMORY_ID_CHARS ||
+          !isString(image.senderId) || !isString(image.timestamp) ||
+          !Number.isFinite(Date.parse(image.timestamp)) || !isString(image.dataUrl) ||
+          (image.senderName !== undefined && !isString(image.senderName)) ||
           (image.origin !== undefined && image.origin !== 'generated') ||
           (image.origin === 'generated'
             ? !['pending', 'sent', 'failed'].includes(image.deliveryStatus ?? '')

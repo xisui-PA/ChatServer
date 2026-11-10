@@ -26,7 +26,7 @@ const imageCall = (overrides = {}) => ({ type: 'image_generation_call', id: 'ima
 const textItem = text => ({ type: 'message', content: [{ type: 'output_text', text }] });
 const reply = (text = 'A cat.', extra = {}) => JSON.stringify({ reply: true, text, memoryUpdates: { notes: [], forget: [] }, ...extra });
 const message = { id: 'message:1', senderId: 'wxid_friend', channel: 'group@chatroom', text: 'Draw a cat.',
-  timestamp: new Date().toISOString(), metadata: { wechatAccount: 'wxid_bot' } };
+  timestamp: new Date().toISOString(), metadata: { wechatAccount: 'wxid_bot', wechatUsername: 'wxid_bot' } };
 
 async function directory(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'chatserver-image-gen-'));
@@ -55,6 +55,7 @@ async function fixture(t, respond) {
 function adapter() {
   const transport = new WechatMessagerAdapter('wechat-token');
   transport.account = 'wxid_bot';
+  transport.selfUsername = 'wxid_bot';
   transport.handler = () => {};
   return transport;
 }
@@ -250,41 +251,69 @@ test('ambiguous provider failures consume quota across retries; explicit request
   assert.ok(await rejected.reserve());
 });
 
-test('WeChat sends base64 image bytes with caption and respects direct routing', async (t) => {
-  const requests = [];
+test('WeChat stages image bytes, sends them separately, and respects direct routing', async (t) => {
+  const uploads = [];
+  const sends = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
-    assert.ok(url.endsWith('/api/messages/send'));
     assert.equal(options.headers.Authorization, 'Bearer wechat-token');
-    requests.push(JSON.parse(options.body));
-    return new Response('{"success":true}');
+    if (url.endsWith('/uploads')) {
+      const file = options.body.get('file');
+      uploads.push({ name: file.name, type: file.type,
+        bytes: Buffer.from(await file.arrayBuffer()) });
+      return new Response(JSON.stringify({ id: `source-${uploads.length}`, mediaType: 'image/png',
+        name: 'generated.png', byteLength: png.length, sha256: '0'.repeat(64),
+        createdAt: new Date().toISOString() }), { status: 201 });
+    }
+    assert.ok(url.endsWith('/v1/accounts/wxid_bot/sends'), url);
+    assert.match(options.headers['Idempotency-Key'], /^[0-9a-f-]{36}$/);
+    const body = JSON.parse(options.body);
+    sends.push(body);
+    if (body.kind === 'image') {
+      return new Response(JSON.stringify({ id: 'job-1', accountId: 'wxid_bot', kind: 'send',
+        threadId: body.threadId, state: 'accepted', reason: null }), { status: 202 });
+    }
+    return new Response(JSON.stringify({ id: 'send-1', accountId: 'wxid_bot',
+      destination: body.threadId, state: 'accepted', errorCode: null,
+      createdAt: new Date().toISOString() }));
   });
   const transport = adapter();
   await transport.reply(message, { text: 'A cat.', images: [image], direct: true });
   await transport.reply(message, { text: '', images: [image] });
-  assert.deepEqual(requests, [
-    { chatId: message.senderId, text: 'A cat.', image: { data: png.toString('base64'), mimeType: 'image/png' } },
-    { chatId: message.channel, image: { data: png.toString('base64'), mimeType: 'image/png' } }
+  // The v2 API has no combined image/text send, so the caption is a separate text send.
+  assert.deepEqual(sends, [
+    { kind: 'image', threadId: message.senderId, sourceId: 'source-1' },
+    { threadId: message.senderId, text: 'A cat.' },
+    { kind: 'image', threadId: message.channel, sourceId: 'source-2' }
   ]);
+  assert.deepEqual(uploads.map(item => [item.name, item.type]),
+    [['generated.png', 'image/png'], ['generated.png', 'image/png']]);
+  assert.ok(uploads.every(item => item.bytes.equals(png)));
+  // Images cannot be mixed with synthesized voice audio.
+  await assert.rejects(transport.reply(message, { images: [image], audio: { data: Buffer.from('ID3'),
+    filename: 'voice.mp3', mimeType: 'audio/mpeg' } }), /voice audio/);
 });
 
-test('WeChat validates attachments before sending and never retries uncertain image sends', async (t) => {
-  let requests = 0;
+test('WeChat validates attachments before staging and never retries an uncertain send', async (t) => {
+  const urls = [];
   const transport = adapter();
-  t.mock.method(globalThis, 'fetch', async () => {
-    requests++;
-    if (requests === 1) { throw new Error('connection lost'); }
-    return new Response('{"success":true}');
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    urls.push(String(url));
+    if (urls.length === 1) { throw new Error('connection lost'); }
+    return new Response(JSON.stringify({ id: 'send-1', accountId: 'wxid_bot',
+      destination: message.channel, state: 'accepted', errorCode: null,
+      createdAt: new Date().toISOString() }));
   });
-  await assert.rejects(transport.reply(message, { text: '', images: [image, { ...image, data: Buffer.from('invalid') }] }));
+  await assert.rejects(transport.reply(message, { text: '', images: [image, { ...image, data: Buffer.from('invalid') }] }),
+    /Only PNG, JPEG, GIF, and WebP/);
   await assert.rejects(transport.reply(message, { text: '', images: [{ ...image, mimeType: 'image/jpeg' }] }), /MIME/);
   const cancelled = new AbortController();
   cancelled.abort();
   await assert.rejects(transport.reply(message, { text: '', images: [image] }, cancelled.signal), { name: 'AbortError' });
-  assert.equal(requests, 0);
+  assert.equal(urls.length, 0);
   await assert.rejects(transport.reply(message, { text: '', images: [image] }), /connection lost/);
-  assert.equal(requests, 1);
+  assert.equal(urls.length, 1);
   await transport.reply(message, { text: 'A later reply.' });
-  assert.equal(requests, 2);
+  assert.equal(urls.length, 2);
 });
 
 test('pipeline wiring allows image requests through model filters and records only confirmed delivery', async (t) => {

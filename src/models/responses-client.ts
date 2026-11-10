@@ -1,9 +1,10 @@
 import { DEFAULT_MODEL_TIMEOUT_MS, MAX_TIMER_MS } from '../limit';
 import { ApiToolDefinition, ToolDefinition } from '../tools/interface';
+import { isNumber, isRecord, isString } from '../type-guards';
 
 /** Validates durations against Node's timer range, including programmatic callers. */
 export function resolveModelTimeoutMs(value: unknown = DEFAULT_MODEL_TIMEOUT_MS): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > MAX_TIMER_MS) {
+  if (!isNumber(value) || !Number.isSafeInteger(value) || value < 1 || value > MAX_TIMER_MS) {
     throw new Error(`Model timeout must be an integer from 1 to ${MAX_TIMER_MS} milliseconds.`);
   }
   return value;
@@ -41,7 +42,7 @@ export interface ResponseRequest {
   reasoningEffort?: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   /** Extra request headers. */
   headers?: Record<string, string>;
-  /** Request timeout in milliseconds. Defaults to 3 minutes. */
+  /** Request timeout in milliseconds. Defaults to 5 minutes. */
   timeoutMs?: number;
   /** Optional caller cancellation, in addition to the request timeout. */
   signal?: AbortSignal;
@@ -77,13 +78,6 @@ export class ResponsesApiError extends Error {
 }
 
 /**
- * Returns true for plain JSON objects (not null, arrays, or primitives).
- */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
  * Builds the endpoint used for Responses API calls.
  */
 export function responsesEndpoint(baseUrl: string): string {
@@ -101,7 +95,7 @@ export function extractOutputText(payload: unknown): string {
     return '';
   }
 
-  if (typeof payload.output_text === 'string') {
+  if (isString(payload.output_text)) {
     return payload.output_text.trim();
   }
 
@@ -115,7 +109,7 @@ export function extractOutputText(payload: unknown): string {
       continue;
     }
     for (const content of item.content) {
-      if (isRecord(content) && content.type === 'output_text' && typeof content.text === 'string') {
+      if (isRecord(content) && content.type === 'output_text' && isString(content.text)) {
         parts.push(content.text);
       }
     }
@@ -139,7 +133,7 @@ export function extractCitations(payload: unknown): ResponseCitation[] {
         continue;
       }
       for (const annotation of content.annotations) {
-        if (!isRecord(annotation) || annotation.type !== 'url_citation' || typeof annotation.url !== 'string') {
+        if (!isRecord(annotation) || annotation.type !== 'url_citation' || !isString(annotation.url)) {
           continue;
         }
         try {
@@ -232,7 +226,7 @@ export async function createResponse(request: ResponseRequest): Promise<Response
       throw new ResponsesApiError(`Response from ${url} did not complete successfully.`, response.status);
     }
     const result: ResponseResult = { outputText: extractOutputText(parsed), citations: extractCitations(parsed), raw: parsed };
-    if (isRecord(parsed) && typeof parsed.id === 'string') {
+    if (isRecord(parsed) && isString(parsed.id)) {
       result.id = parsed.id;
     }
     return result;

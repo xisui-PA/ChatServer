@@ -19,6 +19,7 @@ import { boundedText } from './input-budget';
 import { countTokens } from './tokens';
 import { PendingMediaError } from './pending-media';
 import type { CachedImage } from '../conversations/image-store';
+import { isString } from '../type-guards';
 
 /** Defers this snapshot before any model request or delivery. */
 export class PendingImagesError extends PendingMediaError {
@@ -123,7 +124,7 @@ async function loadImage(image: IncomingImage, signal?: AbortSignal): Promise<st
   attempts.set(image, attempt);
   try {
     const result = await image.load(signal);
-    if (typeof result === 'string') {
+    if (isString(result)) {
       attempts.delete(image);
       return result;
     }

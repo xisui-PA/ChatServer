@@ -2,6 +2,7 @@ import { DEFAULT_MODEL_TIMEOUT_MS } from '../limit';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { resolveModelTimeoutMs } from './responses-client';
+import { isBoolean, isRecord, isString } from '../type-guards';
 
 /**
  * Name of the file that holds model configurations inside the config folder.
@@ -31,7 +32,7 @@ export interface ProviderConfig {
   provider: string;
   /** Required API base URL for Responses (chat) or audio/transcriptions (STT). */
   baseUrl: string;
-  /** Timeout for this provider's model requests and tool cycles; defaults to 180000 ms. */
+  /** Timeout for this provider's model requests and tool cycles; defaults to 300000 ms. */
   timeoutMs?: number;
   /** Models available from this provider. */
   models: ModelEntry[];
@@ -65,31 +66,24 @@ export function getModelsPath(configDir: string): string {
 }
 
 /**
- * Returns true for plain JSON objects (not null, arrays, or primitives).
- */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
  * Validates one model entry.
  */
 function parseModelEntry(value: unknown, where: string, seen: Set<string>): ModelEntry {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     throw new ModelStoreError(`${where} must be an object.`);
   }
 
-  if (typeof value.id !== 'string' || value.id.trim() === '') {
+  if (!isString(value.id) || value.id.trim() === '') {
     throw new ModelStoreError(`${where}: "id" must be a non-empty string.`);
   }
 
   const id = value.id.trim();
   const name = value.name ?? id;
-  if (typeof name !== 'string' || name.trim() === '') {
+  if (!isString(name) || name.trim() === '') {
     throw new ModelStoreError(`${where}: "name" must be a non-empty string.`);
   }
 
-  if (value.supportsImageToolResults !== undefined && typeof value.supportsImageToolResults !== 'boolean') {
+  if (value.supportsImageToolResults !== undefined && !isBoolean(value.supportsImageToolResults)) {
     throw new ModelStoreError(`${where}: "supportsImageToolResults" must be a boolean.`);
   }
   const entry: ModelEntry = {
@@ -110,16 +104,16 @@ function parseModelEntry(value: unknown, where: string, seen: Set<string>): Mode
 function parseProvider(value: unknown, index: number, modelsPath: string): ProviderConfig {
   const where = `${modelsPath}: providers[${index}]`;
 
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     throw new ModelStoreError(`${where} must be an object.`);
   }
 
-  if (typeof value.provider !== 'string' || value.provider.trim() === '') {
+  if (!isString(value.provider) || value.provider.trim() === '') {
     throw new ModelStoreError(`${where}: "provider" must be a non-empty string.`);
   }
 
   const baseUrl = value.baseUrl;
-  if (typeof baseUrl !== 'string' || baseUrl.trim() === '') {
+  if (!isString(baseUrl) || baseUrl.trim() === '') {
     throw new ModelStoreError(`${where}: "baseUrl" must be a non-empty string.`);
   }
 
@@ -168,11 +162,11 @@ export async function loadModels(configDir: string): Promise<ModelsFile> {
     throw new ModelStoreError(`Invalid JSON in ${modelsPath}: ${(error as Error).message}`);
   }
 
-  if (!isPlainObject(parsed) || !Array.isArray(parsed.providers)) {
+  if (!isRecord(parsed) || !Array.isArray(parsed.providers)) {
     throw new ModelStoreError(`${modelsPath} must contain an object with a "providers" array.`);
   }
 
-  if (parsed.$schema !== undefined && typeof parsed.$schema !== 'string') {
+  if (parsed.$schema !== undefined && !isString(parsed.$schema)) {
     throw new ModelStoreError(`${modelsPath}: "$schema" must be a string.`);
   }
 

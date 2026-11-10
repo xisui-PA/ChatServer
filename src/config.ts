@@ -8,6 +8,7 @@ import { parseLocalTools } from './tools/registry';
 import { ApiToolDefinition, ApiToolSpec, LocalToolSpec } from './tools/interface';
 import { parseApiTools } from './tools/api';
 import { parseImageDimension } from './models/image-generation';
+import { isBoolean, isNumber, isRecord, isString } from './type-guards';
 
 /** Configuration for a registered messager implementation. */
 export interface MessagerSpec {
@@ -150,13 +151,6 @@ async function writeDefaultConfig(configPath: string): Promise<void> {
 }
 
 /**
- * Returns true for plain JSON objects (not null, arrays, or primitives).
- */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
  * Warns about keys that are not part of the schema.
  */
 function warnUnknownKeys(record: Record<string, unknown>, known: readonly string[], where: string): void {
@@ -173,14 +167,14 @@ function parseSpecFields(value: unknown, where: string): {
   type: string;
   options: Readonly<Record<string, unknown>>;
 } {
-  if (typeof value === 'string') {
+  if (isString(value)) {
     if (value.trim() === '') {
       throw new ConfigError(`${where} must not be empty.`);
     }
     return { type: value.trim(), options: {} };
   }
 
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     throw new ConfigError(
       `${where} must be a string or an object with a "type" and optional "options".`
     );
@@ -188,12 +182,12 @@ function parseSpecFields(value: unknown, where: string): {
 
   warnUnknownKeys(value, ['type', 'model', 'options'], where);
 
-  if (typeof value.type !== 'string' || value.type.trim() === '') {
+  if (!isString(value.type) || value.type.trim() === '') {
     throw new ConfigError(`${where}: "type" must be a non-empty string.`);
   }
 
   const options = value.options ?? {};
-  if (!isPlainObject(options)) {
+  if (!isRecord(options)) {
     throw new ConfigError(`${where}: "options" must be an object.`);
   }
 
@@ -202,7 +196,7 @@ function parseSpecFields(value: unknown, where: string): {
 
 /** Validates the syntax of a model reference without reading models.json. */
 function modelReference(value: unknown, where: string): string {
-  if (typeof value !== 'string' || !value.trim()) {
+  if (!isString(value) || !value.trim()) {
     throw new ConfigError(`${where} must be a non-empty <provider>/<model id> reference.`);
   }
   const reference = value.trim();
@@ -225,7 +219,7 @@ function imageDimensionLimit(value: unknown, fallback: number, where: string): n
 
 /** Parses the chat transport and its bound reply model. */
 function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     throw new ConfigError(`${where} must be an object with "name", "replier", and optional "options".`);
   }
   if (Object.hasOwn(value, 'tools')) {
@@ -233,32 +227,32 @@ function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
   }
   warnUnknownKeys(value, ['name', 'replier', 'persona', 'memoryTokenLimit', 'mainAccount', 'localTools', 'apiTools',
     'imageGeneration', 'imageWidthLimit', 'imageHeightLimit', 'dailyImageGenLimit', 'options'], where);
-  if (typeof value.name !== 'string' || !value.name.trim()) {
+  if (!isString(value.name) || !value.name.trim()) {
     throw new ConfigError(`${where}: "name" must be a non-empty registered messager name.`);
   }
   const name = value.name.trim();
   if (value.persona !== undefined &&
-    (typeof value.persona !== 'string' || !value.persona.trim())) {
+    (!isString(value.persona) || !value.persona.trim())) {
     throw new ConfigError(`${where}.persona must be a non-empty string.`);
   }
   const persona = (value.persona as string | undefined)?.trim();
   const memoryTokenLimit = value.memoryTokenLimit;
-  if (memoryTokenLimit !== undefined && (typeof memoryTokenLimit !== 'number' || !Number.isInteger(memoryTokenLimit) ||
+  if (memoryTokenLimit !== undefined && (!isNumber(memoryTokenLimit) || !Number.isInteger(memoryTokenLimit) ||
     memoryTokenLimit < MIN_MEMORY_TOKEN_LIMIT || memoryTokenLimit > MAX_MEMORY_TOKEN_LIMIT)) {
     throw new ConfigError(`${where}.memoryTokenLimit must be an integer between ${MIN_MEMORY_TOKEN_LIMIT} and ${MAX_MEMORY_TOKEN_LIMIT}.`);
   }
   if (value.mainAccount !== undefined &&
-    (typeof value.mainAccount !== 'string' || !value.mainAccount.trim())) {
+    (!isString(value.mainAccount) || !value.mainAccount.trim())) {
     throw new ConfigError(`${where}.mainAccount must be a non-empty sender ID.`);
   }
   const mainAccount = (value.mainAccount as string | undefined)?.trim();
-  if (value.imageGeneration !== undefined && typeof value.imageGeneration !== 'boolean') {
+  if (value.imageGeneration !== undefined && !isBoolean(value.imageGeneration)) {
     throw new ConfigError(`${where}.imageGeneration must be a boolean.`);
   }
   const imageWidthLimit = imageDimensionLimit(value.imageWidthLimit, DEFAULT_IMAGE_WIDTH_LIMIT, `${where}.imageWidthLimit`);
   const imageHeightLimit = imageDimensionLimit(value.imageHeightLimit, DEFAULT_IMAGE_HEIGHT_LIMIT, `${where}.imageHeightLimit`);
   const dailyImageGenLimit = value.dailyImageGenLimit === undefined ? DEFAULT_DAILY_IMAGE_GEN_LIMIT : value.dailyImageGenLimit;
-  if (typeof dailyImageGenLimit !== 'number' || !Number.isSafeInteger(dailyImageGenLimit) || dailyImageGenLimit < 0) {
+  if (!isNumber(dailyImageGenLimit) || !Number.isSafeInteger(dailyImageGenLimit) || dailyImageGenLimit < 0) {
     throw new ConfigError(`${where}.dailyImageGenLimit must be a nonnegative safe integer.`);
   }
   if (!hasMessager(name)) {
@@ -267,7 +261,7 @@ function parseMessagerSpec(value: unknown, where: string): MessagerSpec {
     );
   }
   const options = value.options ?? {};
-  if (!isPlainObject(options)) {
+  if (!isRecord(options)) {
     throw new ConfigError(`${where}: "options" must be an object.`);
   }
   let localTools: string[] | undefined;
@@ -301,9 +295,9 @@ function parseFilterSpec(value: unknown, where: string): FilterSpec {
     );
   }
   if (filter.type === 'model') {
-    return { ...filter, model: modelReference(isPlainObject(value) ? value.model : undefined, `${where}.model`) };
+    return { ...filter, model: modelReference(isRecord(value) ? value.model : undefined, `${where}.model`) };
   }
-  if (isPlainObject(value) && value.model !== undefined) {
+  if (isRecord(value) && value.model !== undefined) {
     throw new ConfigError(`${where}: "model" is only supported for type "model".`);
   }
   return filter;
@@ -311,7 +305,7 @@ function parseFilterSpec(value: unknown, where: string): FilterSpec {
 
 /** Validates the STT implementation, required model, and optional conversion command. */
 function parseSttSpec(value: unknown, where: string): SttSpec {
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     throw new ConfigError(`${where} must be an object with type "model"; replace old string STT references with { "type": "model", "model": "provider/model-id" }.`);
   }
   warnUnknownKeys(value, ['type', 'model', 'audioConversionCmd'], where);
@@ -319,7 +313,7 @@ function parseSttSpec(value: unknown, where: string): SttSpec {
     throw new ConfigError(`${where}.type must be "model".`);
   }
   const model = modelReference(value.model, `${where}.model`);
-  if (value.audioConversionCmd !== undefined && (typeof value.audioConversionCmd !== 'string' ||
+  if (value.audioConversionCmd !== undefined && (!isString(value.audioConversionCmd) ||
     !value.audioConversionCmd.trim() || !value.audioConversionCmd.includes('{input}') || !value.audioConversionCmd.includes('{output}'))) {
     throw new ConfigError(`${where}.audioConversionCmd must be a nonempty command containing {input} and {output}.`);
   }
@@ -328,13 +322,13 @@ function parseSttSpec(value: unknown, where: string): SttSpec {
 
 /** Keeps application-controlled speech fields out of provider-specific options. */
 function parseTtsSpec(value: unknown, where: string): TtsSpec {
-  if (!isPlainObject(value) || value.type !== 'model') {
+  if (!isRecord(value) || value.type !== 'model') {
     throw new ConfigError(`${where} must be an object with type "model".`);
   }
   warnUnknownKeys(value, ['type', 'model', 'options'], where);
   const model = modelReference(value.model, `${where}.model`);
   const options = value.options === undefined ? {} : value.options;
-  if (!isPlainObject(options)) {
+  if (!isRecord(options)) {
     throw new ConfigError(`${where}.options must be an object.`);
   }
   for (const key of ['model', 'input', 'response_format', 'stream_format']) {
@@ -351,7 +345,7 @@ function parseTtsSpec(value: unknown, where: string): TtsSpec {
 function parseChat(value: unknown, index: number): ChatDefinition {
   const where = `chats[${index}]`;
 
-  if (!isPlainObject(value)) {
+  if (!isRecord(value)) {
     throw new ConfigError(`${where} must be an object.`);
   }
 
@@ -377,7 +371,7 @@ function parseChat(value: unknown, index: number): ChatDefinition {
  * Validates a parsed JSON value and merges it over the defaults.
  */
 function validateConfig(input: unknown, configPath: string): ChatServerOptions {
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+  if (!isRecord(input)) {
     throw new ConfigError(`${configPath} must contain a JSON object.`);
   }
 
