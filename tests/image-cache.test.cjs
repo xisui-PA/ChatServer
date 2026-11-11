@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { ConversationImageStore } = require('../src/conversations/image-store');
+const { parseMemoryUpdates } = require('../src/conversations/interface');
 const { createConversationInput, PendingImagesError } = require('../src/models/conversation-input');
 const { ReadImageTool } = require('../src/tools/read-image');
 const { ToolRunner } = require('../src/tools/runner');
@@ -13,7 +14,7 @@ const credentials = require('../src/models/credentials');
 const { ModelReplier } = require('../src/repliers/model');
 const { ModelFilter } = require('../src/filters/model');
 const { ChatServer } = require('../src/server');
-const { MEMORY_RETENTION_MS, MAX_CACHED_IMAGES_PER_CONVERSATION, CACHED_IMAGE_REFERENCE_TOKENS } = require('../src/limit');
+const { MEMORY_RETENTION_MS, MAX_CACHED_IMAGES_PER_CONVERSATION, CACHED_IMAGE_REFERENCE_TOKENS, MAX_MEMORY_ID_CHARS } = require('../src/limit');
 const { countTokens } = require('../src/models/tokens');
 
 const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6z8AAAAASUVORK5CYII=';
@@ -92,6 +93,50 @@ test('image maps persist across restart, isolate conversations, and contain no p
   await restarted.start();
   t.after(() => restarted.close());
   assert.deepEqual(await restarted.forConversation('account-a/chat-a').get('image:1'), await access.get('image:1'));
+});
+
+test('encoded WeChat IDs cache, survive restart, and remain usable for image lookup and source citations', async t => {
+  const { directory, store, access } = await fixture(t);
+  const nativeId = 'msg_eyJkYXRhYmFzZSI6Im1lc3NhZ2UvbWVzc2FnZV8wLmRiIiwidGFibGUiOiJNc2dfNjJkZjlhZWY4Mjg3ZGY0NjA3NDMyZDI2ZjQzMDUyNjYiLCJsb2NhbElkIjoiNDUifQ';
+  const imageId = `image:${nativeId}`;
+  const message = { ...source(1), id: `message:${nativeId}`,
+    images: [{ id: imageId, load: async () => dataUrl }], imageAccess: access
+  };
+  const input = JSON.parse(await createConversationInput(message, undefined, { attachImages: false }));
+  assert.equal(input.messages[0].id, message.id);
+  assert.deepEqual(input.messages[0].images, [{ id: imageId, status: 'cached' }]);
+  const updates = parseMemoryUpdates({
+    notes: [{ kind: 'fact', text: `Picture ${imageId} is small.`, sourceIds: [message.id] }], forget: []
+  });
+  assert.deepEqual(updates.notes[0].sourceIds, [message.id]);
+  await store.close();
+  const restarted = new ConversationImageStore(directory);
+  await restarted.start();
+  t.after(() => restarted.close());
+  const restoredAccess = restarted.forConversation('account-a/chat-a');
+  const followUp = JSON.parse(await createConversationInput({
+    id: 'q:2', senderId: 'alice', text: 'Describe the earlier image.', imageAccess: restoredAccess
+  }));
+  assert.equal(followUp.cachedImages[0].id, imageId);
+  assert.equal(followUp.cachedImages[0].messageId, message.id);
+  const result = await new ReadImageTool(restoredAccess).execute({ imageId });
+  assert.equal(result.images[0].dataUrl, dataUrl);
+});
+
+test('image IDs and source citations accept the ID limit and reject empty or oversized IDs', async t => {
+  const { access } = await fixture(t);
+  const id = 'x'.repeat(MAX_MEMORY_ID_CHARS);
+  const message = { ...source(1), id, images: [{ id, load: async () => dataUrl }] };
+  await access.save(message, message.images[0], dataUrl);
+  assert.equal((await new ReadImageTool(access).execute({ imageId: id })).images[0].messageId, id);
+  const updates = sourceId => ({ notes: [{ kind: 'fact', text: 'A picture.', sourceIds: [sourceId] }], forget: [] });
+  assert.equal(parseMemoryUpdates(updates(id)).notes[0].sourceIds[0], id);
+  for (const invalid of ['', id + 'x']) {
+    await assert.rejects(access.save({ ...message, id: invalid }, message.images[0], dataUrl), /valid image and source message IDs/);
+    await assert.rejects(access.save(message, { ...message.images[0], id: invalid }, dataUrl), /valid image and source message IDs/);
+    await assert.rejects(new ReadImageTool(access).execute({ imageId: invalid }), /imageId must be/);
+    assert.throws(() => parseMemoryUpdates(updates(invalid)), /valid sourceIds/);
+  }
 });
 
 test('generated artifacts persist with separate assistant provenance, delivery labels, and conversation isolation', async t => {

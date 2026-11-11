@@ -66,8 +66,8 @@ export const MAX_MEMORY_NOTES_PER_UPDATE = 20;
 export const MAX_MEMORY_FORGET_IDS = 50;
 /** Maximum supporting source IDs per proposed memory note. */
 export const MAX_MEMORY_SOURCE_IDS = 64;
-/** Maximum characters in a stored memory ID or cited source ID. */
-export const MAX_MEMORY_ID_CHARS = 128;
+/** Maximum characters in memory, source, and cached image IDs; accommodates encoded WeChat IDs. */
+export const MAX_MEMORY_ID_CHARS = 1_024;
 
 // Images, voice input, and local audio conversion.
 /** Default maximum generated image width in pixels. */
